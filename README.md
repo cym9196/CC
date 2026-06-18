@@ -34,7 +34,7 @@
 - **视频 → 图像 → C 字模**：从 mp4 / webm / mkv / avi / flv / wmv / m4v / 3gp / ts / m2ts / mpg / ogv / vob / rm 等任意 FFmpeg 支持的容器里按帧间隔抽帧，再走相同的转换流程。
 - **可调参数**：亮度、对比度、旋转 0/90/180/270°、水平/垂直镜像、反色、扫描方向（vertical/horizontal）、8 种扫描顺序。
 - **自定义屏幕尺寸**：W、H 可设到 16384 (16K 屏幕字面含义)；非 8 的倍数自动向上 padding 并在生成代码里写明。
-- **C 驱动 `#define` 可配置**：`oled/OLED.h` 改 3 个宏 (`OLED_WIDTH` / `OLED_HEIGHT` / `OLED_PAGES`) 后整库重新编译即可适配新尺寸；函数签名不变。
+- **C 驱动 `#define` 可配置**：`oled/OLED.h` 改 3 个尺寸宏 (`OLED_WIDTH` / `OLED_HEIGHT` / `OLED_PAGES`) + 4 个 I2C 宏 (`OLED_I2C_ADDR` / `OLED_I2C_CMD` / `OLED_I2C_DATA` / `OLED_CONTROLLER`) 适配 SSD1306 / SH1106 / 自定义控制器；函数签名不变。
 
 ## 效果预览
 
@@ -198,13 +198,14 @@ extern void gif(void);
 
 ## 硬件集成
 
-仓库里附带一份**已参数化**的 SSD1306 风格 C 驱动（来自 [jiangxiekeji](https://jiangxiekeji.com)，BSD 协议）：
+仓库里附带一份**已参数化**的 SSD1306 风格 C 驱动（来自 [jiangxiekeji](https://jiangxiekeji.com)，BSL 协议）：
 
 ```
 oled/
-├── OLED.c         # ~42 KB, 全部循环已用 OLED_WIDTH/OLED_PAGES 参数化
-├── OLED.h         # 顶部 3 个 #define 控制尺寸
-├── OLED_Data.c    # 字库数据（ASCII 6×8 / 8×16 / 中文 16×16）
+├── OLED.c               # ~52 KB, 全部循环已用 OLED_WIDTH/OLED_PAGES 参数化
+├── OLED.h               # 顶部 3 个尺寸 + 6 个 I2C/控制器 #define
+├── OLED_Controller.h    # 按 OLED_CONTROLLER 切换 init 序列 (SSD1306 / SH1106 / USER)
+├── OLED_Data.c          # 字库数据（ASCII 6x8 / 8x16 / 中文 16x16）
 └── OLED_Data.h
 ```
 
@@ -212,14 +213,61 @@ oled/
 
 1. 把 `oled/` 整个目录加进工程。
 2. 在 `main.c` 里 `OLED_Init();`，然后 `gif();` 就能循环播放。
-3. 需要换屏幕尺寸时只改 `OLED.h` 顶部 3 行：
+3. **换屏幕尺寸**只改 `OLED.h` 顶部 3 行：
    ```c
    #define OLED_WIDTH  96
    #define OLED_HEIGHT 16
    ```
-4. 重新编译即可。**I2C 命令序列保持 SSD1306 兼容**；如果换 SSD1322 / SH1106 等其他控制器，需要自己改 `OLED_Init()` 里的命令序列（这是控制器相关的，不在本项目范围内）。
+4. 重新编译即可。
 
-⚠️ **16K 满配警告**：`OLED_DisplayBuf[OLED_PAGES][OLED_WIDTH]` 在 16K×16K 是 **256 MB**，远超任何 MCU 的 RAM。请按你的硬件能力选尺寸。
+### 换 I2C 控制器
+
+`OLED.h` 顶部还有 4 个 `#define` 控制 I2C 协议本身（不需要碰 `OLED.c`）：
+
+| 宏 | 默认 | 用途 |
+|---|---|---|
+| `OLED_I2C_ADDR` | `0x78` | I2C 从机地址字节 (SSD1306)。**SH1106 用 0x7A** |
+| `OLED_I2C_CMD` | `0x00` | 控制字节：命令流 |
+| `OLED_I2C_DATA` | `0x40` | 控制字节：数据流 |
+| `OLED_CONTROLLER` | `OLED_CTRL_SSD1306` | 见下表 |
+
+| `OLED_CONTROLLER` 值 | 适配 | 备注 |
+|---|---|---|
+| `OLED_CTRL_SSD1306` (0) | 0.96" / 1.3" SSD1306 | 默认 |
+| `OLED_CTRL_SH1106` (1) | 1.3" SH1106 | charge pump / precharge / vcomh 微调 |
+| `OLED_CTRL_USER` (2) | SSD1322 / SSD1351 / ILI9341 / 你自己的 | **必须** `#define OLED_INIT_USER() { 你的 init 命令 }` |
+
+**示例 1：换 SH1106**
+
+```c
+// 放在 include OLED.h 之前
+#define OLED_CONTROLLER  OLED_CTRL_SH1106
+```
+
+**示例 2：换 0x7A 地址的 SSD1306 模块**
+
+```c
+#define OLED_I2C_ADDR  0x7A
+```
+
+**示例 3：加 SSD1322 (256x64, 4-bit grayscale)**
+
+```c
+#define OLED_CONTROLLER  OLED_CTRL_USER
+#define OLED_INIT_USER() do {                                  \
+    OLED_WriteCommand(0x15); OLED_WriteCommand(0x00);         \
+    OLED_WriteCommand(0x3F);                                  \
+    OLED_WriteCommand(0x75); OLED_WriteCommand(0x00);         \
+    OLED_WriteCommand(0x3F);                                  \
+    OLED_WriteCommand(0xA0); OLED_WriteCommand(0x53);         \
+    OLED_WriteCommand(0xA3); OLED_WriteCommand(0x00);         \
+    OLED_WriteCommand(0xAF);                                  \
+} while(0)
+```
+
+SSD1322 是 4-bit grayscale，`OLED_DisplayBuf` 是按 8-bit 组织的——你的 `OLED_UpdateArea` 实现需要把 byte 拆成两个 nibble 再写。`OLED_ShowImage` 接口不变，硬件层你看着办。
+
+> **16K 满配警告**：`OLED_DisplayBuf[OLED_PAGES][OLED_WIDTH]` 在 16Kx16K 是 **256 MB**，远超任何 MCU 的 RAM。请按你的硬件能力选尺寸。
 
 ## 配置持久化
 

@@ -20,6 +20,7 @@
 
 #include "gd32vw55x.h"
 #include "OLED.h"
+#include "OLED_Controller.h"
 #include <string.h>
 #include <math.h>
 #include <stdio.h>
@@ -224,8 +225,8 @@ void OLED_I2C_SendByte(uint8_t Byte)
 void OLED_WriteCommand(uint8_t Command)
 {
 	OLED_I2C_Start();				//I2C起�??
-	OLED_I2C_SendByte(0x78);		//发�?�OLED的I2C从机地址
-	OLED_I2C_SendByte(0x00);		//控制字节，给0x00，表示即将写命令
+	OLED_I2C_SendByte(OLED_I2C_ADDR);		//发�?�OLED的I2C从机地址
+	OLED_I2C_SendByte(OLED_I2C_CMD);		//控制字节，给0x00，表示即将写命令
 	OLED_I2C_SendByte(Command);		//写入指定的命�?
 	OLED_I2C_Stop();				//I2C终�??
 }
@@ -241,8 +242,8 @@ void OLED_WriteData(uint8_t *Data, uint8_t Count)
 	uint8_t i;
 	
 	OLED_I2C_Start();				//I2C起�??
-	OLED_I2C_SendByte(0x78);		//发�?�OLED的I2C从机地址
-	OLED_I2C_SendByte(0x40);		//控制字节，给0x40，表示即将写数据
+	OLED_I2C_SendByte(OLED_I2C_ADDR);		//发�?�OLED的I2C从机地址
+	OLED_I2C_SendByte(OLED_I2C_DATA);		//控制字节，给0x40，表示即将写数据
 	/*�?环Count次，进�?�连�?的数�?写入*/
 	for (i = 0; i < Count; i ++)
 	{
@@ -264,47 +265,12 @@ void OLED_WriteData(uint8_t *Data, uint8_t Count)
   */
 void OLED_Init(void)
 {
-	OLED_GPIO_Init();			//先调用底层的�?口初始化
-	
-	/*写入�?系列的命令，对OLED进�?�初始化配置*/
-	OLED_WriteCommand(0xAE);	//设置显示�?�?/关闭�?0xAE关闭�?0xAF�?�?
-	
-	OLED_WriteCommand(0xD5);	//设置显示时钟分�?�比/�?荡器频率
-	OLED_WriteCommand(0x80);	//0x00~0xFF
-	
-	OLED_WriteCommand(0xA8);	//设置多路复用�?
-	OLED_WriteCommand(0x3F);	//0x0E~0x3F
-	
-	OLED_WriteCommand(0xD3);	//设置显示偏移
-	OLED_WriteCommand(0x00);	//0x00~0x7F
-	
-	OLED_WriteCommand(0x40);	//设置显示�?始�?�，0x40~0x7F
-	
-	OLED_WriteCommand(0xA1);	//设置左右方向�?0xA1正常�?0xA0左右反置
-	
-	OLED_WriteCommand(0xC8);	//设置上下方向�?0xC8正常�?0xC0上下反置
+	OLED_GPIO_Init();
 
-	OLED_WriteCommand(0xDA);	//设置COM引脚�?件配�?
-	OLED_WriteCommand(0x12);
-	
-	OLED_WriteCommand(0x81);	//设置对比�?
-	OLED_WriteCommand(0xCF);	//0x00~0xFF
+	/* Init sequence picked at compile time via OLED_CONTROLLER;
+	 * see OLED_Controller.h for SSD1306 / SH1106 / user presets. */
+	OLED_INIT_SEQUENCE();
 
-	OLED_WriteCommand(0xD9);	//设置预充电周�?
-	OLED_WriteCommand(0xF1);
-
-	OLED_WriteCommand(0xDB);	//设置VCOMH取消选择级别
-	OLED_WriteCommand(0x30);
-
-	OLED_WriteCommand(0xA4);	//设置整个显示打开/关闭
-
-	OLED_WriteCommand(0xA6);	//设置正常/反色显示�?0xA6正常�?0xA7反色
-
-	OLED_WriteCommand(0x8D);	//设置充电�?
-	OLED_WriteCommand(0x14);
-
-	OLED_WriteCommand(0xAF);	//�?�?显示
-	
 	OLED_Clear();				//清空显存数组
 	OLED_Update();				//更新显示，清屏，防�?�初始化后未显示内�?�时花屏
 }

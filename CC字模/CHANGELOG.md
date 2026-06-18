@@ -146,3 +146,69 @@ python bench.py                  # 期望: 所有 ms/iter 都在合理范围
 * `convert_to_bitmap` 现在按用户当前 W/H 缩放（之前硬 128×64），如果历史项目里的图都是 128×64 那没影响。
 * `convert_images` 生成的 `.c` 文件首行从 `// font matrix data` 变成 `// OLED font matrix data - WxH`。
 * 16K×16K 满配 = 256 MB 帧缓冲，需用户硬件/C 编译器扛得住。
+
+## I2C 控制器适配 (2026-06-19)
+
+### `oled/` — 适配更多 OLED 控制器
+
+之前 `OLED.c` 把 SSD1306 的 I2C 协议和 init 序列全部硬编码。第三方控制器的用户 (SH1106 1.3" 模块 / 不同 I2C 地址的 SSD1306 模块 / SSD1322 / SSD1351 / ILI9341 等) 改起来很麻烦。改成纯宏 + 单独 init 序列文件。
+
+* **`OLED.h` 顶部新增 6 个宏**：
+  ```c
+  #ifndef OLED_I2C_ADDR
+  #define OLED_I2C_ADDR  0x78   /* SSD1306 默认; SH1106 用 0x7A */
+  #endif
+  #ifndef OLED_I2C_CMD
+  #define OLED_I2C_CMD   0x00   /* 控制字节: 命令流 */
+  #endif
+  #ifndef OLED_I2C_DATA
+  #define OLED_I2C_DATA  0x40   /* 控制字节: 数据流 */
+  #endif
+  #ifndef OLED_CONTROLLER
+  #define OLED_CONTROLLER  OLED_CTRL_SSD1306
+  #endif
+  #define OLED_CTRL_SSD1306  0
+  #define OLED_CTRL_SH1106   1
+  #define OLED_CTRL_USER     2  /* 用你自己的 init 序列 */
+  ```
+  全部 `#ifndef` 包裹，编译期可覆盖。
+
+* **`OLED_Controller.h` (新文件)**：按 `OLED_CONTROLLER` 编译期切换 init 序列。预置 `SSD1306` 和 `SH1106` 两种 (后者对 charge pump / precharge / vcomh 做了 SH1106 偏好的微调)。其它控制器 (SSD1322 / SSD1351 / ILI9341 等) 选 `OLED_CTRL_USER` 并在 include 之前 `#define OLED_INIT_USER() { ...你的 init 命令... }` 即可。
+
+* **`OLED.c` 改动**：
+  - `OLED_WriteCommand` / `OLED_WriteData` 里的硬编码 `0x78` / `0x00` / `0x40` 改成 `OLED_I2C_ADDR` / `OLED_I2C_CMD` / `OLED_I2C_DATA` (2+1+1 = 4 处)。
+  - `OLED_Init()` 里的整段 SSD1306 init 序列 (约 20 行) 替换为单行 `OLED_INIT_SEQUENCE();` (宏定义在 `OLED_Controller.h`)。
+  - 顶部加 `#include "OLED_Controller.h"`。
+  - 函数签名完全不变。
+
+### 怎样换到 SH1106
+
+```c
+// 在 include OLED.h 之前:
+#define OLED_CONTROLLER  OLED_CTRL_SH1106
+// 重新编译。
+```
+
+### 怎样换不同 I2C 地址的 SSD1306 模块
+
+```c
+#define OLED_I2C_ADDR  0x7A   /* 一些模块用 0x3D 左移 */
+```
+
+### 怎样加 SSD1322 / SSD1351 / ILI9341
+
+```c
+// 这些控制器的命令集完全不同 (SSD1322 是 4-bit grayscale, ILI9341 是 16-bit color + SPI),
+// 选 OLED_CTRL_USER 并提供你自己的 init 序列:
+#define OLED_CONTROLLER  OLED_CTRL_USER
+#define OLED_INIT_USER() do {                  \
+    /* SSD1322 例子 - 列地址 */                  \
+    OLED_WriteCommand(0x15); OLED_WriteCommand(0x00); OLED_WriteCommand(0x3F); \
+    OLED_WriteCommand(0x75); OLED_WriteCommand(0x00); OLED_WriteCommand(0x3F); \
+    OLED_WriteCommand(0x81); OLED_WriteCommand(0x7F); \
+    OLED_WriteCommand(0xA0); OLED_WriteCommand(0x53); /* 256x64 */ \
+    OLED_WriteCommand(0xA3); OLED_WriteCommand(0x00); \
+    OLED_WriteCommand(0xAF); \
+} while(0)
+```
+然后你自己的 init 还得负责把 `OLED_DisplayBuf[OLED_PAGES][OLED_WIDTH]` 写到硬件 (可能需要按 4-bit / 16-bit 重排 — 高层 `OLED_ShowImage` 已经按 byte 写 framebuffer, 你的 init 要保证硬件看到的 framebuffer 格式正确)。

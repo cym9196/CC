@@ -28,6 +28,30 @@
 #endif
 #define OLED_PAGES  ((OLED_HEIGHT + 7) / 8)
 
+/*I2C 传输参数 - 编译期可配。不同模块可能用不同地址。*/
+/*  0x78 = SSD1306 7-bit 0x3C 左移 1 位 */
+/*  0x7A = SH1106  7-bit 0x3D 左移 1 位 */
+#ifndef OLED_I2C_ADDR
+#define OLED_I2C_ADDR  0x78
+#endif
+/* I2C 控制字节: 0x00 = 命令流, 0x40 = 数据流 (SSD1306/SH1106 通用) */
+#ifndef OLED_I2C_CMD
+#define OLED_I2C_CMD   0x00
+#endif
+#ifndef OLED_I2C_DATA
+#define OLED_I2C_DATA  0x40
+#endif
+
+/*控制器选择 - 决定 OLED_Init() 默认的初始化序列。*/
+/*  如需更复杂的协议 (SSD1322 / SSD1351 / ILI9341 等),*/
+/*  选 OLED_CTRL_USER 并在你的代码里 #define OLED_INIT_USER() 宏。*/
+#ifndef OLED_CONTROLLER
+#define OLED_CONTROLLER  OLED_CTRL_SSD1306
+#endif
+#define OLED_CTRL_SSD1306  0
+#define OLED_CTRL_SH1106   1
+#define OLED_CTRL_USER     2
+
 /*函数声明*********************/
 
 /*初始化函数*/
