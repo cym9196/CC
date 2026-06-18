@@ -18,6 +18,16 @@
 /*********************参数宏定义*/
 
 
+
+/*屏幕尺寸宏定义 - 编译期可配。必须是 8 的倍数; 修改后整库重新编译。*/
+#ifndef OLED_WIDTH
+#define OLED_WIDTH  128
+#endif
+#ifndef OLED_HEIGHT
+#define OLED_HEIGHT 64
+#endif
+#define OLED_PAGES  ((OLED_HEIGHT + 7) / 8)
+
 /*函数声明*********************/
 
 /*初始化函数*/

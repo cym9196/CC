@@ -1,10 +1,12 @@
 import io
+import json
 import os
 import glob
 import sys
 import tempfile
 import threading
 import tkinter as tk
+from pathlib import Path
 from tkinter import ttk, filedialog, messagebox
 
 import cv2
@@ -19,48 +21,66 @@ except Exception:
 
 
 class ImageToFontConverter:
+    # 屏幕尺寸硬上限 ("16K 屏幕"字面含义)
+    _MAX_DIM = 16384
+
     def __init__(self, root):
         self.root = root
         self.root.title("图像转字模工具")
         self.root.geometry("960x800")
-        
+
         # 设置窗口图标
         self.set_window_icon()
-        
+
+        # 屏幕尺寸 (W, H 必须是 8 的倍数；非 8 倍会 pad)
+        self.width = tk.IntVar(value=128)
+        self.height = tk.IntVar(value=64)
+        self._W = 128  # pad 后的实际宽度
+        self._H = 64   # pad 后的实际高度
+        self._was_padded = False
+
         # 存储参数
         self.brightness = tk.DoubleVar(value=0)
         self.contrast = tk.DoubleVar(value=1.0)
-        self.scan_direction = tk.StringVar(value="vertical")  # 扫描方向: vertical(垂直) 或 horizontal(水平)
-        self.scan_order = tk.StringVar(value="left_to_right_top_to_bottom")  # 扫描顺序
-        self.invert_color = tk.BooleanVar(value=False)  # 反色
-        self.rotation = tk.StringVar(value="0")  # 旋转角度
-        self.horizontal_flip = tk.BooleanVar(value=False)  # 水平镜像
-        self.vertical_flip = tk.BooleanVar(value=False)  # 垂直镜像
-        self.slideshow_interval = tk.IntVar(value=500)  # 幻灯片切换间隔（毫秒）
-        self.video_frame_interval = tk.IntVar(value=30)  # 视频帧间隔
+        self.scan_direction = tk.StringVar(value="vertical")
+        self.scan_order = tk.StringVar(value="left_to_right_top_to_bottom")
+        self.invert_color = tk.BooleanVar(value=False)
+        self.rotation = tk.StringVar(value="0")
+        self.horizontal_flip = tk.BooleanVar(value=False)
+        self.vertical_flip = tk.BooleanVar(value=False)
+        self.slideshow_interval = tk.IntVar(value=500)
+        self.video_frame_interval = tk.IntVar(value=30)
         self.image_folder = tk.StringVar()
         self.output_file = tk.StringVar()
-        self.video_file = tk.StringVar()  # 视频文件路径
-        
+        self.video_file = tk.StringVar()
+
         # 幻灯片播放相关
         self.slideshow_images = []
         self.slideshow_index = 0
         self.slideshow_running = False
         self.slideshow_job = None
-        
+
         # 当前显示的图像
         self.current_image = None
         self.processed_image = None
-        
+
+        # 临时文件、后台线程、防抖、暂停
+        self._icon_temp_path = None
+        self._video_thread = None
+        self._video_pause = threading.Event()  # set = running, clear = paused
+        self._video_pause.set()
+        self._preview_after_id = None
+
+        # 加载配置 + 校验默认尺寸
+        self._config_path = Path.home() / ".cym_cc_config.json"
+        self._load_config()
+        self._validate_size(self.width.get(), self.height.get(), silent=True)
+
         # 创建UI
         self.create_widgets()
 
-        # 临时文件、后台线程、防抖状态
-        self._icon_temp_path = None
-        self._video_thread = None
-        self._preview_after_id = None
-        self.root.protocol('WM_DELETE_WINDOW', self._on_close)
-        
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+
     def set_window_icon(self):
         try:
             icon_path = "cym_icon.ico"
@@ -94,6 +114,103 @@ class ImageToFontConverter:
         finally:
             self.root.destroy()
             self.root.quit()
+
+    # --- 持久化配置 -------------------------------------------------
+
+    def _load_config(self):
+        try:
+            data = json.loads(self._config_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return
+        for key, var in [
+            ("width", self.width), ("height", self.height),
+            ("image_folder", self.image_folder), ("output_file", self.output_file),
+            ("video_file", self.video_file),
+            ("scan_direction", self.scan_direction), ("scan_order", self.scan_order),
+            ("slideshow_interval", self.slideshow_interval),
+            ("video_frame_interval", self.video_frame_interval),
+            ("brightness", self.brightness), ("contrast", self.contrast),
+            ("rotation", self.rotation),
+            ("invert_color", self.invert_color),
+            ("horizontal_flip", self.horizontal_flip),
+            ("vertical_flip", self.vertical_flip),
+        ]:
+            if key in data:
+                try:
+                    var.set(data[key])
+                except (tk.TclError, ValueError):
+                    pass
+
+    def _save_config(self):
+        try:
+            data = {
+                "width": self.width.get(), "height": self.height.get(),
+                "image_folder": self.image_folder.get(),
+                "output_file": self.output_file.get(),
+                "video_file": self.video_file.get(),
+                "scan_direction": self.scan_direction.get(),
+                "scan_order": self.scan_order.get(),
+                "slideshow_interval": self.slideshow_interval.get(),
+                "video_frame_interval": self.video_frame_interval.get(),
+                "brightness": self.brightness.get(),
+                "contrast": self.contrast.get(),
+                "rotation": self.rotation.get(),
+                "invert_color": bool(self.invert_color.get()),
+                "horizontal_flip": bool(self.horizontal_flip.get()),
+                "vertical_flip": bool(self.vertical_flip.get()),
+            }
+            self._config_path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+        except OSError as e:
+            print(f"save config failed: {e}")
+
+    def _on_close(self):
+        try:
+            self._save_config()
+            if self._icon_temp_path and os.path.exists(self._icon_temp_path):
+                try:
+                    os.unlink(self._icon_temp_path)
+                except OSError:
+                    pass
+            self._icon_temp_path = None
+        finally:
+            self.root.destroy()
+            self.root.quit()
+
+    # --- 尺寸校验 / padding ----------------------------------------
+
+    @staticmethod
+    def _normalize_size(w, h):
+        W = ((w + 7) // 8) * 8 if w > 0 else 8
+        H = ((h + 7) // 8) * 8 if h > 0 else 8
+        return W, H, (W != w or H != h)
+
+    def _validate_size(self, w, h, silent=False):
+        if not (1 <= w <= self._MAX_DIM and 1 <= h <= self._MAX_DIM):
+            if not silent:
+                messagebox.showerror("invalid size", f"W/H must be in [1, {self._MAX_DIM}]")
+            return False
+        W, H, padded = self._normalize_size(w, h)
+        self.width.set(W)
+        self.height.set(H)
+        self._W = W
+        self._H = H
+        self._was_padded = padded
+        if padded and not silent:
+            messagebox.showinfo("size padded",
+                                f"requested {w}x{h} is not a multiple of 8; padded to {W}x{H}")
+        return True
+
+    def _apply_size(self):
+        try:
+            w = int(self.width.get())
+            h = int(self.height.get())
+        except (tk.TclError, ValueError):
+            messagebox.showerror("invalid size", "W/H must be integers")
+            return
+        if self._validate_size(w, h):
+            self.slideshow_canvas.config(width=self._W * 2, height=self._H * 2)
+            if self.image_folder.get():
+                self.refresh_preview()
     def create_widgets(self):
         # 主框架
         main_frame = ttk.Frame(self.root, padding="10")
@@ -130,10 +247,37 @@ class ImageToFontConverter:
         ttk.Entry(frame_interval_frame, textvariable=self.video_frame_interval, width=10).grid(row=0, column=0, sticky=tk.W)
         ttk.Label(frame_interval_frame, text="帧").grid(row=0, column=1, sticky=tk.W, padx=(5, 0))
         ttk.Button(frame_interval_frame, text="从视频生成图片", command=self.extract_frames_from_video).grid(row=0, column=2, sticky=tk.W, padx=(10, 0))
+
+        # 视频编码/分辨率/进度
+        self.video_info_label = ttk.Label(file_frame, text="(select a video to inspect)")
+        self.video_info_label.grid(row=4, column=0, columnspan=3, sticky=tk.W, pady=(2, 0))
+        self.video_progress = ttk.Progressbar(file_frame, orient="horizontal", mode="determinate", maximum=100)
+        # Created but not gridded; shown when extraction starts
+        self.video_progress.grid(row=5, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(2, 0))
+        self.video_progress.grid_remove()
+        self.video_progress_label = ttk.Label(file_frame, text="")
+        self.video_progress_label.grid(row=6, column=0, columnspan=3, sticky=tk.W)
+        self.video_progress_label.grid_remove()
+        video_pause_frame = ttk.Frame(file_frame)
+        video_pause_frame.grid(row=7, column=0, columnspan=3, sticky=tk.W, pady=(2, 0))
+        self.video_pause_btn = ttk.Button(video_pause_frame, text="pause", command=self._toggle_video_pause, state=tk.DISABLED, width=10)
+        self.video_pause_btn.pack(side=tk.LEFT)
+        self.video_extract_btn = None  # set below
+
+        # 屏幕尺寸 (W、H 必须是 8 的倍数)
+        screen_frame = ttk.LabelFrame(main_frame, text="屏幕尺寸 (8 的倍数; 上限 16384)", padding="10")
+        screen_frame.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
+        screen_frame.columnconfigure(1, weight=1)
+        ttk.Label(screen_frame, text="宽 (W):").grid(row=0, column=0, sticky=tk.W, pady=2)
+        ttk.Entry(screen_frame, textvariable=self.width, width=10).grid(row=0, column=1, sticky=tk.W, padx=(5, 5))
+        ttk.Label(screen_frame, text="高 (H):").grid(row=0, column=2, sticky=tk.W, padx=(10, 0), pady=2)
+        ttk.Entry(screen_frame, textvariable=self.height, width=10).grid(row=0, column=3, sticky=tk.W, padx=(5, 5))
+        ttk.Button(screen_frame, text="应用到图像处理", command=self._apply_size).grid(row=0, column=4, sticky=tk.W, padx=(10, 0))
+        ttk.Label(screen_frame, text="(非 8 倍会自动 pad; 改 C 端 oled/OLED.h 顶部 #define 同步硬件)").grid(row=1, column=0, columnspan=5, sticky=tk.W, pady=(4, 0))
         
         # 参数调节区域
         param_frame = ttk.LabelFrame(main_frame, text="图像参数调节", padding="10")
-        param_frame.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
+        param_frame.grid(row=2, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
         param_frame.columnconfigure(1, weight=1)
         
         # 亮度调节
@@ -235,8 +379,8 @@ class ImageToFontConverter:
         slideshow_frame.rowconfigure(0, weight=1)
         slideshow_frame.config(width=300)  # 设置幻灯片区域的固定宽度
         
-        # 幻灯片Canvas，保持256x128像素大小
-        self.slideshow_canvas = tk.Canvas(slideshow_frame, bg="black", width=256, height=128)
+        # 幻灯片Canvas，按当前 W、H 的 2x 显示
+        self.slideshow_canvas = tk.Canvas(slideshow_frame, bg="black", width=self._W * 2, height=self._H * 2)
         self.slideshow_canvas.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         
         # 幻灯片控制按钮
@@ -275,12 +419,73 @@ class ImageToFontConverter:
             self.output_file.set(file)
             
     def browse_video(self):
+        # cv2.VideoCapture can read any container FFmpeg supports.
         file = filedialog.askopenfilename(
-            filetypes=[("Video Files", "*.mp4 *.avi *.mov *.mkv"), ("All Files", "*.*")]
+            filetypes=[
+                ("All supported video", "*.mp4 *.avi *.mov *.mkv *.webm *.flv *.wmv *.m4v "
+                     "*.3gp *.ts *.m2ts *.mpg *.mpeg *.ogv *.vob *.rm *.rmvb *.asf"),
+                ("All files", "*.*"),
+            ]
         )
         if file:
             self.video_file.set(file)
+            self._inspect_video(file)
             
+    def _set_video_progress(self, pct, label):
+        if pct is None:
+            self.video_progress.configure(mode='indeterminate')
+            self.video_progress.start(50)
+        else:
+            self.video_progress.configure(mode='determinate', value=pct * 100)
+        self.video_progress_label.config(text=label)
+
+    def _show_video_ui(self, show):
+        if show:
+            self.video_progress.grid()
+            self.video_progress_label.grid()
+        else:
+            self.video_progress.grid_remove()
+            self.video_progress_label.grid_remove()
+            self.video_progress.stop()
+            self.video_progress.configure(mode='determinate', value=0)
+            self.video_progress_label.config(text='')
+
+    def _toggle_video_pause(self):
+        if self._video_pause.is_set():
+            self._video_pause.clear()
+            self.video_pause_btn.config(text='resume')
+        else:
+            self._video_pause.set()
+            self.video_pause_btn.config(text='pause')
+
+    def _video_busy(self, busy):
+        btn = getattr(self, 'video_extract_btn', None)
+        if btn is not None:
+            btn.config(state=tk.DISABLED if busy else tk.NORMAL)
+        self.video_pause_btn.config(state=tk.NORMAL if busy else tk.DISABLED)
+        if not busy:
+            self.video_pause_btn.config(text='pause')
+            self._video_pause.set()
+
+    def _inspect_video(self, path):
+        cap = cv2.VideoCapture(path)
+        try:
+            if not cap.isOpened():
+                self.video_info_label.config(text='(cannot open)')
+                return
+            fourcc_int = int(cap.get(cv2.CAP_PROP_FOURCC))
+            fourcc = ''.join(chr((fourcc_int >> (8 * i)) & 0xFF) for i in range(4)) or '????'
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            n = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            self.video_info_label.config(
+                text=f'codec: {fourcc} | {fps:.1f} fps | {w}x{h} | {n} frames'
+            )
+        finally:
+            cap.release()
+
+
     def extract_frames_from_video(self):
         video_path = self.video_file.get()
         output_folder = self.image_folder.get()
@@ -302,22 +507,45 @@ class ImageToFontConverter:
             cap = None
             err = None
             saved_count = 0
+            corrupt = 0
+            total = 0
             try:
                 os.makedirs(output_folder, exist_ok=True)
                 cap = cv2.VideoCapture(video_path)
                 if not cap.isOpened():
                     err = RuntimeError("cannot open video file")
                     return
+                total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                self.root.after(0, lambda t=total: self._set_video_progress(
+                    None if t <= 0 else 0.0,
+                    f"frame 0 / {t}" if t > 0 else "frame 0 / ?"))
+
                 frame_count = 0
+                last_report = 0
                 while True:
+                    if not self._video_pause.is_set():
+                        self._video_pause.wait(timeout=0.1)
                     ret, frame = cap.read()
                     if not ret:
                         break
+                    if frame is None or frame.size == 0:
+                        corrupt += 1
+                        frame_count += 1
+                        continue
                     if frame_count % frame_interval == 0:
-                        resized = cv2.resize(frame, (128, 64))
-                        cv2.imwrite(os.path.join(output_folder, f"frame_{saved_count:04d}.png"), resized)
-                        saved_count += 1
+                        try:
+                            resized = cv2.resize(frame, (self._W, self._H))
+                            cv2.imwrite(os.path.join(output_folder, f"frame_{saved_count:04d}.png"), resized)
+                            saved_count += 1
+                        except Exception:
+                            corrupt += 1
                     frame_count += 1
+                    if frame_count - last_report >= max(50, total // 50 if total > 0 else 100):
+                        last_report = frame_count
+                        pct = (frame_count / total) if total > 0 else None
+                        self.root.after(0, lambda p=pct, fc=frame_count, t=total, sv=saved_count:
+                            self._set_video_progress(p,
+                                f"frame {fc}/{t} saved {sv}" if t > 0 else f"frame {fc} saved {sv}"))
             except Exception as e:
                 err = e
             finally:
@@ -325,16 +553,24 @@ class ImageToFontConverter:
                     cap.release()
 
             def _done():
+                self._show_video_ui(False)
+                self._video_busy(False)
                 if err is not None:
                     messagebox.showerror("error", f"video extract failed: {err}")
                 else:
-                    messagebox.showinfo("done", f"extracted {saved_count} frames to {output_folder}")
+                    msg = f"extracted {saved_count} frames to {output_folder}"
+                    if corrupt:
+                        msg += f"  ({corrupt} corrupt frames skipped)"
+                    messagebox.showinfo("done", msg)
                     self.refresh_preview()
             self.root.after(0, _done)
 
+        self._video_busy(True)
+        self._show_video_ui(True)
+        self._video_pause.set()
+        self.video_pause_btn.config(text="pause")
         self._video_thread = threading.Thread(target=_worker, daemon=True)
         self._video_thread.start()
-
     def apply_brightness_contrast(self, image):
         # 应用亮度和对比度调整
         brightness = self.brightness.get()
@@ -353,127 +589,97 @@ class ImageToFontConverter:
         return img.astype(np.uint8)
         
     def convert_to_bitmap(self, image):
-        # 将图像转换为128x64的二值图像
-        # 图像已经是128*64大小，不需要调整尺寸
+        """Resize to (self._W, self._H), apply brightness/contrast, optional rotation/
+        mirror, invert, then threshold to binary."""
         if len(image.shape) == 3:
             gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         else:
             gray = image
-            
-        # 应用亮度和对比度调整
         adjusted = self.apply_brightness_contrast(gray)
-        
-        # 应用图像变换
-        # 旋转
         if self.rotation.get() == "90":
             adjusted = cv2.rotate(adjusted, cv2.ROTATE_90_CLOCKWISE)
         elif self.rotation.get() == "180":
             adjusted = cv2.rotate(adjusted, cv2.ROTATE_180)
         elif self.rotation.get() == "270":
             adjusted = cv2.rotate(adjusted, cv2.ROTATE_90_COUNTERCLOCKWISE)
-            
-        # 水平镜像
         if self.horizontal_flip.get():
             adjusted = cv2.flip(adjusted, 1)
-            
-        # 垂直镜像
         if self.vertical_flip.get():
             adjusted = cv2.flip(adjusted, 0)
-            
-        # 调整回128x64大小
-        adjusted = cv2.resize(adjusted, (128, 64), interpolation=cv2.INTER_NEAREST)
-        
-        # 反色处理
+        adjusted = cv2.resize(adjusted, (self._W, self._H), interpolation=cv2.INTER_NEAREST)
         if self.invert_color.get():
             adjusted = 255 - adjusted
-        
-        # 转换为二值图像
         _, binary = cv2.threshold(adjusted, 127, 255, cv2.THRESH_BINARY)
-        
         return binary
-        
     # Bit weights for packing 8 pixels into a byte (MSB first).
     # For right-to-left horizontal scan orders the original code reads pixels
     # right-to-left with LSB weights; reading them left-to-right with these MSB
     # weights produces the same byte (the rightmost pixel ends up weighted 1 = bit 0).
     _WEIGHTS_MSB = np.array([128, 64, 32, 16, 8, 4, 2, 1], dtype=np.uint16)
 
-    # (scan_direction, scan_order) -> list of (orient, a, b) tuples.
-    #   "V" with (a, b) = (row_start, col)  -> byte covers 8 vertical pixels of one column.
-    #   "H" with (a, b) = (row, col_start)  -> byte covers 8 horizontal pixels of one row.
-    # The iteration order matches the original code exactly.
-    _FONT_ITER = {
-        # Vertical scan: page outer, col inner. outer = row_start = page*8.
-        ("vertical",   "left_to_right_top_to_bottom"):  [("V", o, c) for o in range(0, 64, 8)   for c in range(128)],
-        ("vertical",   "top_to_bottom_left_to_right"):  [("V", o, c) for o in range(0, 64, 8)   for c in range(128)],
-        ("vertical",   "right_to_left_top_to_bottom"): [("V", o, c) for o in range(0, 64, 8)   for c in range(127, -1, -1)],
-        ("vertical",   "top_to_bottom_right_to_left"): [("V", o, c) for o in range(0, 64, 8)   for c in range(127, -1, -1)],
-        ("vertical",   "bottom_to_top_left_to_right"): [("V", o, c) for o in range(56, -1, -8) for c in range(128)],
-        ("vertical",   "left_to_right_bottom_to_top"): [("V", o, c) for o in range(56, -1, -8) for c in range(128)],
-        ("vertical",   "right_to_left_bottom_to_top"): [("V", o, c) for o in range(56, -1, -8) for c in range(127, -1, -1)],
-        ("vertical",   "bottom_to_top_right_to_left"): [("V", o, c) for o in range(56, -1, -8) for c in range(127, -1, -1)],
-        # Horizontal scan, row-major (byte = 8 horizontal pixels of one row).
-        # The natural starting col is the leftmost col of the 8-pixel group.
-        # For right-to-left, the original code iterates the rightmost col (col=127,119,...,7),
-        # which corresponds to a leftmost col of col-7 = 120,112,...,0.
-        ("horizontal", "left_to_right_top_to_bottom"):  [("H", r, c) for r in range(64)         for c in range(0, 128, 8)],
-        ("horizontal", "right_to_left_top_to_bottom"): [("H", r, c)  for r in range(64)         for c in range(120, -1, -8)],
-        ("horizontal", "left_to_right_bottom_to_top"): [("H", r, c) for r in range(63, -1, -1) for c in range(0, 128, 8)],
-        ("horizontal", "right_to_left_bottom_to_top"): [("H", r, c)  for r in range(63, -1, -1) for c in range(120, -1, -8)],
-        # Horizontal scan, col-major (byte = 8 vertical pixels of one column).
-        # Each tuple is (orient="V", a=row_start, b=col) so the byte-packing
-        # below can treat both vertical and horizontal col-major cases uniformly.
-        ("horizontal", "top_to_bottom_left_to_right"):  [("V", r, c) for c in range(128)        for r in range(0, 64, 8)],
-        ("horizontal", "top_to_bottom_right_to_left"): [("V", r, c) for c in range(127, -1, -1) for r in range(0, 64, 8)],
-        ("horizontal", "bottom_to_top_left_to_right"): [("V", r, c) for c in range(128)        for r in range(63, -1, -8)],
-        ("horizontal", "bottom_to_top_right_to_left"): [("V", r, c) for c in range(127, -1, -1) for r in range(63, -1, -8)],
-    }
+    @staticmethod
+    def _make_iter(direction, order, W, H):
+        """Return a list of (orient, a, b) tuples for the given scan params.
+        "V" with (a, b) = (row_start, col) -> byte covers 8 vertical pixels of column b.
+        "H" with (a, b) = (row, col_start) -> byte covers 8 horizontal pixels of row a.
+        Iteration order matches the original code; the bottom_to_top horizontal col-major
+        quirk (rows 63, 55, ..., 7 instead of 56, 48, ..., 0) is preserved for
+        backwards compatibility with previously generated C arrays."
+        """
+        if direction == "vertical":
+            if order in ("left_to_right_top_to_bottom", "top_to_bottom_left_to_right"):
+                pages, cols = range(0, H, 8), range(W)
+            elif order in ("right_to_left_top_to_bottom", "top_to_bottom_right_to_left"):
+                pages, cols = range(0, H, 8), range(W - 1, -1, -1)
+            elif order in ("bottom_to_top_left_to_right", "left_to_right_bottom_to_top"):
+                pages, cols = range(H - 8, -1, -8), range(W)
+            else:  # right_to_left_bottom_to_top, bottom_to_top_right_to_left
+                pages, cols = range(H - 8, -1, -8), range(W - 1, -1, -1)
+            return [("V", p, c) for p in pages for c in cols]
+        # horizontal
+        if order == "left_to_right_top_to_bottom":
+            return [("H", r, c) for r in range(H) for c in range(0, W, 8)]
+        if order == "top_to_bottom_left_to_right":
+            return [("V", r, c) for c in range(W) for r in range(0, H, 8)]
+        if order == "right_to_left_top_to_bottom":
+            return [("H", r, c) for r in range(H) for c in range(W - 8, -1, -8)]
+        if order == "bottom_to_top_left_to_right":
+            return [("V", r, c) for c in range(W) for r in range(H - 1, -1, -8)]
+        if order == "left_to_right_bottom_to_top":
+            return [("H", r, c) for r in range(H - 1, -1, -1) for c in range(0, W, 8)]
+        if order == "right_to_left_bottom_to_top":
+            return [("H", r, c) for r in range(H - 1, -1, -1) for c in range(W - 8, -1, -8)]
+        if order == "top_to_bottom_right_to_left":
+            return [("V", r, c) for c in range(W - 1, -1, -1) for r in range(0, H, 8)]
+        # bottom_to_top_right_to_left
+        return [("V", r, c) for c in range(W - 1, -1, -1) for r in range(H - 1, -1, -8)]
 
     @staticmethod
-    def _pack_byte(is_black, orient, a, b, weights):
-        """Pack 8 pixels into a byte.
-        "V": 8 vertical pixels of column b, starting at row a.
-        "H": 8 horizontal pixels of row a, starting at col b.
-        Pure-Python loop is faster than numpy for 1024 small per-byte ops.
-        Out-of-bounds pixels are treated as not-black (matches the original).
+    def _pack_byte(is_black, orient, a, b, weights, W, H):
+        """Pack 8 pixels into a byte. Slices clipped at W/H edges;
+        out-of-bounds pixels are treated as not-black.
         """
         if orient == "V":
             bits = 0
             for k in range(8):
-                if a + k < is_black.shape[0] and is_black[a + k, b]:
+                if a + k < H and is_black[a + k, b]:
                     bits |= weights[k]
         else:
             bits = 0
             for k in range(8):
-                if b + k < is_black.shape[1] and is_black[a, b + k]:
+                if b + k < W and is_black[a, b + k]:
                     bits |= weights[k]
         return bits
-
     def image_to_font_data(self, image):
-        """Convert a 128x64 binary image to a 1024-byte OLED font matrix.
-
-        The byte layout and iteration order depend on scan_direction and scan_order:
-        - vertical scan: 8 pages x 128 columns; each byte contains 8 vertical pixels
-          of one column.
-        - horizontal scan: 64 rows x 16 column-groups of 8; the row-major orders
-          pack 8 horizontal pixels of one row, while the col-major orders pack 8
-          vertical pixels of one column (same byte content as vertical mode but a
-          different iteration order).
-
-        Note: a few of the original horizontal orders use an inverted (LSB-first)
-        bit order. This is preserved here so that previously generated C arrays
-        remain valid.
+        """Convert a binary image of size (self._H, self._W) to a
+        (self._W * self._H / 8)-byte OLED font matrix.
+        See _make_iter for the layout mapping.
         """
         is_black = (self.convert_to_bitmap(image) == 0)
         weights = self._WEIGHTS_MSB
-
-        font_data = []
-        for orient, a, b in self._FONT_ITER[
-            (self.scan_direction.get(), self.scan_order.get())
-        ]:
-            font_data.append(self._pack_byte(is_black, orient, a, b, weights))
-        return font_data
-
+        W, H = self._W, self._H
+        plan = self._make_iter(self.scan_direction.get(), self.scan_order.get(), W, H)
+        return [self._pack_byte(is_black, orient, a, b, weights, W, H) for orient, a, b in plan]
     def update_preview(self, event=None):
         # Immediate parameter label update (no debounce)
         self.brightness_label.config(text=f"{self.brightness.get():.0f}")
@@ -522,7 +728,7 @@ class ImageToFontConverter:
         
         # 显示所有图片
         images_per_row = 4
-        preview_size = (128, 64)
+        preview_size = (self._W, self._H)
         
         self.preview_images = []
         for i, img_path in enumerate(image_files[:16]):  # 限制最多显示16张图片
@@ -597,7 +803,7 @@ class ImageToFontConverter:
                 # 转换为tkinter可用格式，放大到256x128
                 from PIL import Image, ImageTk
                 pil_image = Image.fromarray(rgb_image)
-                pil_image = pil_image.resize((256, 128), Image.LANCZOS)
+                pil_image = pil_image.resize((self._W * 2, self._H * 2), Image.LANCZOS)
                 tk_image = ImageTk.PhotoImage(pil_image)
                 self.slideshow_images.append(tk_image)  # 保持引用防止被垃圾回收
             except Exception as e:
@@ -672,7 +878,7 @@ class ImageToFontConverter:
         self.slideshow_job = self.slideshow_canvas.after(self.slideshow_interval.get(), self.slideshow)
         
     def _list_valid_images(self, folder):
-        """Return all readable 128x64 images in folder (sorted by filename)."""
+        """Return all readable images whose pixel dimensions match (self._H, self._W)."""
         candidates = []
         for ext in ("png", "jpg", "jpeg", "bmp"):
             candidates.extend(glob.glob(os.path.join(folder, f"*.{ext}")))
@@ -683,11 +889,10 @@ class ImageToFontConverter:
             if image is None:
                 continue
             h, w = image.shape[:2]
-            if h != 64 or w != 128:
+            if h != self._H or w != self._W:
                 continue
             valid.append(path)
         return valid
-
     @staticmethod
     def _format_hex_array(font_data, indent=4):
         """Format a font_data byte list as a C array literal (16 bytes per line)."""
@@ -710,13 +915,17 @@ class ImageToFontConverter:
 
         image_files = self._list_valid_images(folder)
         if not image_files:
-            messagebox.showwarning("warning", "no 128x64 images found in folder")
+            messagebox.showwarning("warning", f"no {self._W}x{self._H} images found in folder")
             return
 
         try:
             slideshow_interval = self.slideshow_interval.get()
+            W, H = self._W, self._H
             with open(output, "w", encoding="utf-8") as f:
-                f.write("// font matrix data\n")
+                f.write(f"// OLED font matrix data - {W}x{H}")
+                if self._was_padded:
+                    f.write(f"  (NOTE: requested WxH was padded to {W}x{H})")
+                f.write("\n")
                 f.write("#include <stdint.h>\n\n")
                 for i, img_path in enumerate(image_files):
                     image = cv2.imread(img_path)
@@ -728,9 +937,10 @@ class ImageToFontConverter:
 
                 n = len(image_files)
                 f.write(f"// total: {n} image(s)\n")
+                f.write(f"// OLED_ShowImage calls below use ({W}, {H})\n")
                 f.write("void gif(void) {\n")
                 for i in range(n):
-                    f.write(f"    OLED_ShowImage(0,0,128,64,IMG_DATA{i + 1});"
+                    f.write(f"    OLED_ShowImage(0,0,{W},{H},IMG_DATA{i + 1});"
                             f"OLED_Update();delay_1ms({slideshow_interval});OLED_Clear();\n")
                 f.write("}\n")
 
@@ -749,7 +959,6 @@ class ImageToFontConverter:
             messagebox.showinfo("done", f"converted {len(image_files)} image(s)\n{output}\n{header_file}")
         except Exception as e:
             messagebox.showerror("error", f"conversion failed: {e}")
-
     def show_inspire_image(self):
         # 加载并显示激励图片，优先从内嵌 resources 加载，回退到磁盘文件
         img_path = "jili.jpg"  # 默认磁盘文件名
