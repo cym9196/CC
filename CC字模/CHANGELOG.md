@@ -212,3 +212,28 @@ python bench.py                  # 期望: 所有 ms/iter 都在合理范围
 } while(0)
 ```
 然后你自己的 init 还得负责把 `OLED_DisplayBuf[OLED_PAGES][OLED_WIDTH]` 写到硬件 (可能需要按 4-bit / 16-bit 重排 — 高层 `OLED_ShowImage` 已经按 byte 写 framebuffer, 你的 init 要保证硬件看到的 framebuffer 格式正确)。
+
+## v2.0 GUI + EXE 重新打包 (2026-06-19)
+
+### GUI 大改
+
+把硬编码 `ttk` 控件升级成现代风格:
+
+* **`_init_style()`**：自动挑选 `vista` / `winnative` / `clam` / `alt` 中可用的 ttk 主题，统一字体 (`TkDefaultFont` size 10)、`TLabelFrame.Label` 加粗、`TButton` 加大 padding、`Accent.TButton` 粗体大 padding 给主操作按钮用。
+* **顶栏 (Header bar)**：标题 "图像转字模工具  v2.0" 14pt 粗体 + 副标题 (灰色) + `ttk.Separator`，跟下面所有 LabelFrame 视觉上分开。
+* **底部状态栏 (Status bar)**：所有操作 (转换 / 抽帧 / 错误) 都通过 `_update_status(text, level="info"|"warn"|"error")` 写到 `Status.TLabel`，level 改变文字颜色 (#444 / #b35900 / #cc0000)。`WM_DELETE_WINDOW` 退出前也调用。
+* **主操作按钮 (开始转换) 升级成 `Accent.TButton`**。
+* **视频信息 Label** 用蓝色 (#0066cc) 显示 `codec / fps / 分辨率 / 总帧数`。
+* 不再用的 _MAX_DIM / _W / _H 校验保留；现在 `_validate_size` 在 `__init__` 里调一次 (silent)，用户改 W/H 后再调 (有弹窗)。
+
+### 重新打包 EXE
+
+- 跑 `python build.py`，PyInstaller 6.16 自动打包 `dist/CC.exe` (79 MB)。
+- 验证 EXE 能正常启动、显示新主题窗口、调用 `_init_style` / `_init_status_bar`、状态栏能更新。
+- 因为没装 UPX，size 是 79 MB；装 UPX 后预计能再压 ~30%。
+- 一并把根目录的旧 `CC.exe` (74 MB) 替换为新版本 (79 MB)。
+
+### 上传
+
+- commit 进 main, push 到 origin。
+- GitHub Release: v0.2 (新), 把新 `CC.exe` 作为 asset 上传。

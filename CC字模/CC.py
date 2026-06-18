@@ -6,6 +6,7 @@ import sys
 import tempfile
 import threading
 import tkinter as tk
+import tkinter.font as tkfont
 from pathlib import Path
 from tkinter import ttk, filedialog, messagebox
 
@@ -211,7 +212,72 @@ class ImageToFontConverter:
             self.slideshow_canvas.config(width=self._W * 2, height=self._H * 2)
             if self.image_folder.get():
                 self.refresh_preview()
+
+    # --- GUI styling (modern ttk theme) ---
+
+    def _init_style(self):
+        """Apply a modern ttk theme: 'vista' on Windows (native look),
+        'clam' as a clean fallback. Bigger fonts, generous padding,
+        a touch of color on accent buttons."""
+        style = ttk.Style(self.root)
+        for theme in ("vista", "winnative", "clam", "alt", "default"):
+            if theme in style.theme_names():
+                try:
+                    style.theme_use(theme)
+                    break
+                except tk.TclError:
+                    continue
+        try:
+            default_font = tkfont.nametofont("TkDefaultFont")
+            default_font.configure(family=default_font.cget("family"), size=10)
+            text_font = tkfont.nametofont("TkTextFont")
+            text_font.configure(family=text_font.cget("family"), size=10)
+        except Exception:
+            pass
+        style.configure("TFrame", padding=2)
+        style.configure("TLabelFrame", padding=8)
+        style.configure("TLabelFrame.Label", font=("TkDefaultFont", 10, "bold"))
+        style.configure("TButton", padding=(10, 5))
+        style.configure("Accent.TButton", padding=(12, 6), font=("TkDefaultFont", 10, "bold"))
+        style.configure("TEntry", padding=4)
+        style.configure("TCombobox", padding=4)
+        style.configure("Horizontal.TProgressbar", thickness=8)
+        style.configure("Status.TLabel", padding=(8, 4), foreground="#444444")
+
+    def _init_status_bar(self):
+        """Build a thin status bar at the bottom of the window.
+        Updated via _update_status(text)."""
+        self._status_frame = ttk.Frame(self.root, relief="sunken", padding=(8, 2))
+        self._status_frame.grid(row=1, column=0, sticky=(tk.W, tk.E))
+        self._status_frame.columnconfigure(0, weight=1)
+        self.status_label = ttk.Label(
+            self._status_frame, textvariable=self.status_var,
+            style="Status.TLabel", anchor="w"
+        )
+        self.status_label.grid(row=0, column=0, sticky=(tk.W, tk.E))
+        self._status_separator = ttk.Separator(self.root, orient="horizontal")
+        self._status_separator.grid(row=2, column=0, sticky=(tk.W, tk.E))
+
+    def _update_status(self, text, level="info"):
+        """Update the status bar. level in ('info', 'warn', 'error')."""
+        self.status_var.set(text)
+        try:
+            style = ttk.Style(self.root)
+            color = {"info": "#444444", "warn": "#b35900", "error": "#cc0000"}.get(level, "#444444")
+            style.configure("Status.TLabel", foreground=color)
+        except Exception:
+            pass
+
     def create_widgets(self):
+        # --- Modern ttk theme + global styles ---
+        self._init_style()
+
+        # --- Window icon (already set in set_window_icon) ---
+
+        # --- Status bar (created early so other methods can update it) ---
+        self.status_var = tk.StringVar(value="Ready")
+        self._init_status_bar()
+
         # 主框架
         main_frame = ttk.Frame(self.root, padding="10")
         main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
@@ -222,9 +288,27 @@ class ImageToFontConverter:
         main_frame.columnconfigure(0, weight=1)  # 调整列权重，让预览区域更宽
         main_frame.columnconfigure(1, weight=0)  # 幻灯片区域不扩展
         
+        # Header bar
+        header_frame = ttk.Frame(main_frame)
+        header_frame.grid(row=0, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 8))
+        header_frame.columnconfigure(0, weight=1)
+        ttk.Label(
+            header_frame, text="图像转字模工具  v2.0",
+            font=("TkDefaultFont", 14, "bold")
+        ).grid(row=0, column=0, sticky=tk.W)
+        ttk.Label(
+            header_frame, text="屏幕、视频、扫描参数可调 · 点击【开始转换】生成 C 字模",
+            foreground="#666666"
+        ).grid(row=1, column=0, sticky=tk.W, pady=(2, 0))
+        # Add a thin separator below the header for visual grouping
+        ttk.Separator(main_frame, orient="horizontal").grid(
+            row=0, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 2)
+        )
+
+        # Push all subsequent frames down by 1 (header at row 0)
         # 文件选择区域
         file_frame = ttk.LabelFrame(main_frame, text="文件设置", padding="10")
-        file_frame.grid(row=0, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
+        file_frame.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
         file_frame.columnconfigure(1, weight=1)
         
         ttk.Label(file_frame, text="图像文件夹:").grid(row=0, column=0, sticky=tk.W, pady=2)
@@ -266,7 +350,7 @@ class ImageToFontConverter:
 
         # 屏幕尺寸 (W、H 必须是 8 的倍数)
         screen_frame = ttk.LabelFrame(main_frame, text="屏幕尺寸 (8 的倍数; 上限 16384)", padding="10")
-        screen_frame.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
+        screen_frame.grid(row=2, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
         screen_frame.columnconfigure(1, weight=1)
         ttk.Label(screen_frame, text="宽 (W):").grid(row=0, column=0, sticky=tk.W, pady=2)
         ttk.Entry(screen_frame, textvariable=self.width, width=10).grid(row=0, column=1, sticky=tk.W, padx=(5, 5))
@@ -277,7 +361,7 @@ class ImageToFontConverter:
         
         # 参数调节区域
         param_frame = ttk.LabelFrame(main_frame, text="图像参数调节", padding="10")
-        param_frame.grid(row=2, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
+        param_frame.grid(row=3, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
         param_frame.columnconfigure(1, weight=1)
         
         # 亮度调节
@@ -355,10 +439,10 @@ class ImageToFontConverter:
         
         # 图像预览区域
         preview_frame = ttk.LabelFrame(main_frame, text="图像预览", padding="10")
-        preview_frame.grid(row=11, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 10))
+        preview_frame.grid(row=4, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 10))
         preview_frame.columnconfigure(0, weight=1)
         preview_frame.rowconfigure(0, weight=1)
-        main_frame.rowconfigure(11, weight=1)
+        main_frame.rowconfigure(4, weight=1)
         
         # Canvas用于显示图像
         self.canvas = tk.Canvas(preview_frame, bg="white")
@@ -374,7 +458,7 @@ class ImageToFontConverter:
         
         # 幻灯片播放区域
         slideshow_frame = ttk.LabelFrame(main_frame, text="幻灯片播放", padding="10")
-        slideshow_frame.grid(row=11, column=1, sticky=(tk.W, tk.E, tk.N, tk.S), padx=(10, 0), pady=(0, 10))
+        slideshow_frame.grid(row=4, column=1, sticky=(tk.W, tk.E, tk.N, tk.S), padx=(10, 0), pady=(0, 10))
         slideshow_frame.columnconfigure(0, weight=1)
         slideshow_frame.rowconfigure(0, weight=1)
         slideshow_frame.config(width=300)  # 设置幻灯片区域的固定宽度
@@ -395,15 +479,15 @@ class ImageToFontConverter:
         
         # 控制按钮区域
         button_frame = ttk.Frame(main_frame)
-        button_frame.grid(row=12, column=0, columnspan=2, pady=(10, 0))
+        button_frame.grid(row=5, column=0, columnspan=2, pady=(10, 0))
         
         ttk.Button(button_frame, text="刷新预览", command=self.refresh_preview).pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Button(button_frame, text="开始转换", command=self.convert_images).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(button_frame, text="开始转换", command=self.convert_images, style="Accent.TButton").pack(side=tk.LEFT, padx=(0, 5))
         ttk.Button(button_frame, text="退出", command=self.root.quit).pack(side=tk.LEFT)
         
         # 添加激励按钮
         self.inspire_button = ttk.Button(main_frame, text="激励", command=self.show_inspire_image)
-        self.inspire_button.grid(row=13, column=0, sticky=tk.SW, padx=(10, 0), pady=(10, 10))
+        self.inspire_button.grid(row=6, column=0, sticky=tk.SW, padx=(10, 0), pady=(10, 10))
         
     def browse_folder(self):
         folder = filedialog.askdirectory()
@@ -502,6 +586,8 @@ class ImageToFontConverter:
         if self._video_thread is not None and self._video_thread.is_alive():
             messagebox.showinfo("info", "previous extraction still in progress")
             return
+
+        self._update_status(f"extracting from {os.path.basename(video_path)}...", "info")
 
         def _worker():
             cap = None
@@ -918,6 +1004,7 @@ class ImageToFontConverter:
             messagebox.showwarning("warning", f"no {self._W}x{self._H} images found in folder")
             return
 
+        self._update_status(f"converting {len(image_files)} image(s) to {self._W}x{self._H} C array...", "info")
         try:
             slideshow_interval = self.slideshow_interval.get()
             W, H = self._W, self._H
@@ -956,8 +1043,10 @@ class ImageToFontConverter:
                 f.write("\nextern void gif(void);\n")
                 f.write(f"\n#endif // {protect_macro}\n")
 
+            self._update_status(f"converted {len(image_files)} image(s) -> {output}", "info")
             messagebox.showinfo("done", f"converted {len(image_files)} image(s)\n{output}\n{header_file}")
         except Exception as e:
+            self._update_status(f"conversion failed: {e}", "error")
             messagebox.showerror("error", f"conversion failed: {e}")
     def show_inspire_image(self):
         # 加载并显示激励图片，优先从内嵌 resources 加载，回退到磁盘文件
