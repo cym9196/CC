@@ -1,5 +1,41 @@
 # Changelog
 
+## v0.4.2 - 用 base64 编码嵌入收款二维码 (qrcode_b64.py) (2026-06-19)
+
+v0.4.1 的激励图片是作者的微信支付收款二维码 (含真实姓名), 用 jpg 嵌入到 resources.py 不安全, 因为 jpg 二进制进 git 后无法审计/diff, 容易泄露。v0.4.2 改成 base64 源码嵌入。
+
+### 改动
+
+* **新增 qrcode_b64.py** (286 KB) - 收款二维码的 base64 源码:
+  * `QRCODE_JPG_B64` 字符串 (261308 字符)
+  * `QRCODE_WIDTH = 1409`, `QRCODE_HEIGHT = 1920`
+  * `get_bytes()` 一键解码回原始 jpg 字节
+  * 完整 docstring 解释为什么用 base64 + 如何替换
+* **新增 _encode_qr.py** 辅助脚本: `python _encode_qr.py jili.jpg` 自动生成 qrcode_b64.py
+* **build.py 改造** - 优先级: qrcode_b64.py -> 磁盘 jili.jpg/png -> picture/
+* **show_inspire_image 重写**:
+  * 标题: 💰 支持作者 - CC v0.4.2 (含 emoji)
+  * 按钮: [💸 已支付, 感谢支持] [关闭] (去掉 GitHub Star 按钮, 收款场景不需要)
+  * 自适应屏幕缩放, 永远保持原始 1409:1920 宽高比 (QR 码不变形可扫)
+  * 4 级 fallback: qrcode_b64.py -> 磁盘 jpg -> 磁盘 png -> resources 嵌入 -> 文字兜底
+* **操作 tab 按钮文字**: 激励 (额外) -> 💰 支持作者 (扫码赠送)
+* **.gitignore**: 加上 jili.jpg / jili.png / jili.jpeg (源头 jpg 不进 git, 只进 base64 源码)
+
+### untrack
+
+本 commit untrack 了 CC字模/jili.jpg 和 jili.png (文件保留本地)。
+**注意**: 旧 commit 3b886c2 里的 jili.jpg 仍在 git 历史中, 如要彻底删除需 `git filter-branch` (heavy 操作, 由用户决定是否做)。
+
+### 测试
+
+* verify_original.py: **112/112 通过**
+* verify_custom_size.py: **160/160 通过**
+* show_inspire_image 弹窗测试: QR 码完整显示, 标题/按钮/缩放全部正常
+
+### EXE
+
+* PyInstaller 重新打包: CC.exe (80,386,436 bytes, +216KB)
+* GitHub Release: **v0.4.2** (https://github.com/cym9196/CC/releases/tag/v0.4.2)
 ## v0.4.1 - 激励图片 (jili.jpg) (2026-06-19)
 
 v0.4 发布后, 加入 激励 (彩蛋) 按钮配套的精美图片, 并完善弹窗体验。
