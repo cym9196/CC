@@ -1066,54 +1066,168 @@ class ImageToFontConverter:
             self._update_status(f"conversion failed: {e}", "error")
             messagebox.showerror("error", f"conversion failed: {e}")
     def show_inspire_image(self):
-        # 加载并显示激励图片，优先从内嵌 resources 加载，回退到磁盘文件
-        img_path = "jili.jpg"  # 默认磁盘文件名
-        from PIL import Image, ImageTk
+        """Load the embedded jili.jpg (or jili.png) and show it in a styled Toplevel.
+
+        Looks in this order:
+        1. jili.jpg on disk next to the script / EXE
+        2. jili.png on disk
+        3. resources.RESOURCES['jili.jpg'] (embedded in EXE)
+        4. resources.RESOURCES['jili.png']  (embedded in EXE)
+
+        If still nothing found, shows a friendly text-only "thank you" window
+        instead of failing.
+        """
+        from PIL import Image, ImageTk, ImageDraw, ImageFont
 
         try:
             pil_image = None
+            source = ""
 
-            # 先尝试磁盘路径
-            if os.path.exists(img_path):
-                pil_image = Image.open(img_path)
+            # 1) disk jili.jpg
+            for cand in ("jili.jpg", "jili.png"):
+                if os.path.exists(cand):
+                    try:
+                        pil_image = Image.open(cand).convert("RGB")
+                        source = cand
+                        break
+                    except Exception:
+                        pil_image = None
 
-            # 如果磁盘没有，尝试从 resources 中读取
-            if pil_image is None and resources is not None and hasattr(resources, 'get'):
-                data = resources.get('jili.jpg') or resources.get('jili.png')
-                if data:
-                    pil_image = Image.open(io.BytesIO(data))
+            # 2) embedded resources
+            if pil_image is None and resources is not None and hasattr(resources, "get"):
+                for key in ("jili.jpg", "jili.png"):
+                    data = resources.get(key)
+                    if data:
+                        try:
+                            pil_image = Image.open(io.BytesIO(data)).convert("RGB")
+                            source = f"embedded:{key}"
+                            break
+                        except Exception:
+                            pil_image = None
 
+            # 3) if nothing found, fall back to a text-only thank-you image
             if pil_image is None:
-                raise FileNotFoundError('激励图片未找到（磁盘或内嵌资源中均无）')
+                pil_image = self._make_text_thankyou_image()
+                source = "generated-fallback"
 
-            # 转换为tkinter可用格式
+            # Scale image down if larger than screen
+            max_w, max_h = 720, 540
+            if pil_image.width > max_w or pil_image.height > max_h:
+                ratio = min(max_w / pil_image.width, max_h / pil_image.height)
+                new_size = (int(pil_image.width * ratio), int(pil_image.height * ratio))
+                pil_image = pil_image.resize(new_size, Image.LANCZOS)
+
             tk_image = ImageTk.PhotoImage(pil_image)
 
-            # 创建新的窗口
+            # Build the Toplevel window
             inspire_window = tk.Toplevel(self.root)
-            inspire_window.title("谢谢您的激励！")
-            inspire_window.geometry(f"{pil_image.width}x{pil_image.height}")  # 设置窗口大小为图片尺寸
+            inspire_window.title("🎉 谢谢您的激励！ — CC v0.4")
+            inspire_window.configure(bg="#fff8e7")
+            # add some padding around the image
+            pad = 12
+            win_w = pil_image.width + 2 * pad
+            win_h = pil_image.height + 2 * pad + 40  # +40 for the close button
+            # center on parent
+            try:
+                px = self.root.winfo_rootx()
+                py = self.root.winfo_rooty()
+                pw = self.root.winfo_width()
+                ph = self.root.winfo_height()
+                x = px + (pw - win_w) // 2
+                y = py + (ph - win_h) // 2
+                inspire_window.geometry(f"{win_w}x{win_h}+{max(x, 0)}+{max(y, 0)}")
+            except Exception:
+                inspire_window.geometry(f"{win_w}x{win_h}")
+            inspire_window.resizable(False, False)
+            # remove standard title bar icon (use the app icon if available)
+            try:
+                inspire_window.iconbitmap("cym_icon.ico")
+            except Exception:
+                pass
 
-            # 在新窗口中显示图像
-            canvas = tk.Canvas(inspire_window, bg="white", width=pil_image.width, height=pil_image.height)
-            canvas.pack(fill=tk.BOTH, expand=True)
-
-            # 显示图像
+            # Image canvas
+            canvas = tk.Canvas(
+                inspire_window,
+                bg="#fff8e7",
+                width=pil_image.width,
+                height=pil_image.height,
+                highlightthickness=0,
+                bd=0,
+            )
+            canvas.pack(pady=(pad, 4))
             canvas.create_image(
                 pil_image.width // 2,
                 pil_image.height // 2,
                 anchor=tk.CENTER,
-                image=tk_image
+                image=tk_image,
             )
+            canvas.image = tk_image  # prevent GC
 
-            # 保持引用防止被垃圾回收
-            canvas.image = tk_image
+            # Close button row
+            btn_frame = ttk.Frame(inspire_window)
+            btn_frame.pack(pady=(0, pad))
+            ttk.Button(
+                btn_frame,
+                text="关闭",
+                width=12,
+                command=inspire_window.destroy,
+            ).pack(side=tk.LEFT, padx=4)
+            ttk.Button(
+                btn_frame,
+                text="⭐ 去 GitHub 给个 Star",
+                width=22,
+                command=lambda: (self._open_github(), inspire_window.destroy()),
+            ).pack(side=tk.LEFT, padx=4)
 
-            # 禁止调整窗口大小
-            inspire_window.resizable(False)
+            # keep refs alive
+            inspire_window._img_ref = tk_image
+            inspire_window._pil_ref = pil_image
 
+            self._update_status(f"激励图片已打开 (source: {source})", "info")
         except Exception as e:
             messagebox.showwarning("警告", f"无法加载激励图片: {e}")
+
+    def _open_github(self):
+        """Open the CC GitHub repo in the default browser."""
+        import webbrowser
+        try:
+            webbrowser.open("https://github.com/cym9196/CC")
+        except Exception as e:
+            messagebox.showwarning("警告", f"无法打开浏览器: {e}")
+
+    def _make_text_thankyou_image(self):
+        """Generate a fallback 'thank you' image if jili.jpg is missing."""
+        from PIL import Image, ImageDraw, ImageFont
+        W, H = 600, 400
+        img = Image.new("RGB", (W, H), "#fff8e7")
+        draw = ImageDraw.Draw(img)
+        # gradient
+        for y in range(H):
+            r = 255
+            g = 248 - int(20 * y / H)
+            b = 200 - int(60 * y / H)
+            draw.line([(0, y), (W, y)], fill=(r, g, b))
+        # font
+        font_paths = [
+            r"C:\Windows\Fonts\simhei.ttf",
+            r"C:\Windows\Fonts\msyh.ttc",
+            r"C:\Windows\Fonts\simsun.ttc",
+        ]
+        font_big = None
+        for fp in font_paths:
+            if os.path.exists(fp):
+                try:
+                    font_big = ImageFont.truetype(fp, 48)
+                    break
+                except Exception:
+                    pass
+        if font_big is None:
+            font_big = ImageFont.load_default()
+        text = "谢谢您的支持！"
+        bbox = draw.textbbox((0, 0), text, font=font_big)
+        tw = bbox[2] - bbox[0]
+        draw.text(((W - tw) // 2, H // 2 - 30), text, fill=(120, 40, 40), font=font_big)
+        return img
 
 def main():
     root = tk.Tk()
