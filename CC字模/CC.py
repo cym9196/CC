@@ -414,7 +414,7 @@ class ImageToFontConverter:
         ttk.Entry(row, textvariable=self.slideshow_interval, width=8).pack(side=tk.LEFT, padx=(4, 0))
 
     def _build_ops_tab(self, parent):
-        """Operations tab: refresh, start conversion, exit, inspire, video frame extraction."""
+        """Operations tab: refresh, start conversion, exit, support-author QR, video frame extraction."""
         f = ttk.Frame(parent, padding=8)
         f.pack(fill=tk.BOTH, expand=True)
 
@@ -445,7 +445,7 @@ class ImageToFontConverter:
         self.video_pause_btn.pack(anchor=tk.W, pady=(2, 0))
 
         ttk.Separator(f, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=(8, 8))
-        ttk.Button(f, text="激励 (额外)", command=self.show_inspire_image).pack(fill=tk.X, pady=2)
+        ttk.Button(f, text="💰 支持作者 (扫码赠送)", command=self.show_inspire_image).pack(fill=tk.X, pady=2)
 
     def _build_right_pane(self, parent_paned):
         """Right pane: preview (top) + slideshow (bottom)."""
@@ -1066,67 +1066,89 @@ class ImageToFontConverter:
             self._update_status(f"conversion failed: {e}", "error")
             messagebox.showerror("error", f"conversion failed: {e}")
     def show_inspire_image(self):
-        """Load the embedded jili.jpg (or jili.png) and show it in a styled Toplevel.
+        """Show the author QR code (WeChat Pay tip jar) in a styled Toplevel.
 
-        Looks in this order:
-        1. jili.jpg on disk next to the script / EXE
-        2. jili.png on disk
-        3. resources.RESOURCES['jili.jpg'] (embedded in EXE)
-        4. resources.RESOURCES['jili.png']  (embedded in EXE)
+        Image sources, in priority order:
+        1. qrcode_b64.py module (base64-encoded JPG, source of truth)
+        2. jili.jpg / jili.png on disk (developer fallback, gitignored)
+        3. resources.RESOURCES["jili.jpg"] / ["jili.png"] (embedded in EXE)
+        4. Auto-generated text-only "thank you" image as final fallback
 
-        If still nothing found, shows a friendly text-only "thank you" window
-        instead of failing.
+        The QR code is portrait-oriented (1409x1920), so the window keeps the
+        aspect ratio. If the screen is too small, the image is scaled down
+        proportionally - never cropped or distorted, so it stays scannable.
         """
-        from PIL import Image, ImageTk, ImageDraw, ImageFont
+        from PIL import Image, ImageTk
 
         try:
             pil_image = None
             source = ""
 
-            # 1) disk jili.jpg
-            for cand in ("jili.jpg", "jili.png"):
-                if os.path.exists(cand):
-                    try:
-                        pil_image = Image.open(cand).convert("RGB")
-                        source = cand
-                        break
-                    except Exception:
-                        pil_image = None
+            # 1) qrcode_b64.py (base64-encoded) - preferred, source of truth
+            try:
+                import qrcode_b64
+                data = qrcode_b64.get_bytes()
+                pil_image = Image.open(io.BytesIO(data)).convert("RGB")
+                source = "qrcode_b64.py (embedded base64)"
+            except Exception:
+                pil_image = None
 
-            # 2) embedded resources
+            # 2) disk jili.jpg / jili.png
+            if pil_image is None:
+                for cand in ("jili.jpg", "jili.png"):
+                    if os.path.exists(cand):
+                        try:
+                            pil_image = Image.open(cand).convert("RGB")
+                            source = f"disk:{cand}"
+                            break
+                        except Exception:
+                            pil_image = None
+
+            # 3) embedded resources
             if pil_image is None and resources is not None and hasattr(resources, "get"):
                 for key in ("jili.jpg", "jili.png"):
                     data = resources.get(key)
                     if data:
                         try:
                             pil_image = Image.open(io.BytesIO(data)).convert("RGB")
-                            source = f"embedded:{key}"
+                            source = f"resources:{key}"
                             break
                         except Exception:
                             pil_image = None
 
-            # 3) if nothing found, fall back to a text-only thank-you image
+            # 4) fallback text-only image
             if pil_image is None:
                 pil_image = self._make_text_thankyou_image()
-                source = "generated-fallback"
+                source = "fallback:text"
 
-            # Scale image down if larger than screen
-            max_w, max_h = 720, 540
+            # Scale down to fit the screen, preserving aspect ratio.
+            # QR codes must stay scannable, so never scale UP.
+            try:
+                sw = self.root.winfo_screenwidth()
+                sh = self.root.winfo_screenheight()
+            except Exception:
+                sw, sh = 1920, 1080
+            # Reserve room for the title bar + button row + padding
+            max_w = max(360, int(sw * 0.55))
+            max_h = max(480, int(sh * 0.85))
             if pil_image.width > max_w or pil_image.height > max_h:
                 ratio = min(max_w / pil_image.width, max_h / pil_image.height)
-                new_size = (int(pil_image.width * ratio), int(pil_image.height * ratio))
+                new_size = (max(1, int(pil_image.width * ratio)),
+                            max(1, int(pil_image.height * ratio)))
                 pil_image = pil_image.resize(new_size, Image.LANCZOS)
 
             tk_image = ImageTk.PhotoImage(pil_image)
 
             # Build the Toplevel window
             inspire_window = tk.Toplevel(self.root)
-            inspire_window.title("🎉 谢谢您的激励！ — CC v0.4")
+            inspire_window.title("💰 支持作者 — CC v0.4.2")
             inspire_window.configure(bg="#fff8e7")
-            # add some padding around the image
-            pad = 12
+
+            pad = 16
+            btn_h = 44
             win_w = pil_image.width + 2 * pad
-            win_h = pil_image.height + 2 * pad + 40  # +40 for the close button
+            win_h = pil_image.height + 2 * pad + btn_h
+
             # center on parent
             try:
                 px = self.root.winfo_rootx()
@@ -1139,7 +1161,6 @@ class ImageToFontConverter:
             except Exception:
                 inspire_window.geometry(f"{win_w}x{win_h}")
             inspire_window.resizable(False, False)
-            # remove standard title bar icon (use the app icon if available)
             try:
                 inspire_window.iconbitmap("cym_icon.ico")
             except Exception:
@@ -1163,29 +1184,29 @@ class ImageToFontConverter:
             )
             canvas.image = tk_image  # prevent GC
 
-            # Close button row
+            # Button row
             btn_frame = ttk.Frame(inspire_window)
             btn_frame.pack(pady=(0, pad))
             ttk.Button(
                 btn_frame,
-                text="关闭",
-                width=12,
+                text="💸 已支付，感谢支持",
+                width=22,
                 command=inspire_window.destroy,
             ).pack(side=tk.LEFT, padx=4)
             ttk.Button(
                 btn_frame,
-                text="⭐ 去 GitHub 给个 Star",
-                width=22,
-                command=lambda: (self._open_github(), inspire_window.destroy()),
+                text="关闭",
+                width=10,
+                command=inspire_window.destroy,
             ).pack(side=tk.LEFT, padx=4)
 
             # keep refs alive
             inspire_window._img_ref = tk_image
             inspire_window._pil_ref = pil_image
 
-            self._update_status(f"激励图片已打开 (source: {source})", "info")
+            self._update_status(f"支付二维码已打开 (source: {source})", "info")
         except Exception as e:
-            messagebox.showwarning("警告", f"无法加载激励图片: {e}")
+            messagebox.showwarning("警告", f"无法加载二维码: {e}")
 
     def _open_github(self):
         """Open the CC GitHub repo in the default browser."""

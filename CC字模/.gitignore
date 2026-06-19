@@ -17,3 +17,9 @@ dist/
 .DS_Store
 Thumbs.db
 cym_icon.ico
+
+# Author QR code source files (gitignored - the QR code is embedded as
+# base64 in qrcode_b64.py instead, so the binary jpg never enters git)
+jili.jpg
+jili.png
+jili.jpeg
