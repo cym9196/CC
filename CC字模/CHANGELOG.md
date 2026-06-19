@@ -237,3 +237,48 @@ python bench.py                  # 期望: 所有 ms/iter 都在合理范围
 
 - commit 进 main, push 到 origin。
 - GitHub Release: v0.2 (新), 把新 `CC.exe` 作为 asset 上传。
+
+## v2.0 GUI - 两栏布局 (2026-06-19, 修订)
+
+之前的 v2.0 GUI 把 header / file / screen / params / preview / controls 全部塞在 main_frame 的不同 row 里，960x800 默认窗口下预览和幻灯片都挤到屏幕外。改成 `ttk.PanedWindow` 水平两栏：
+
+### 布局
+
+```
++----------------------------------------------------------------+
+|  图像转字模工具  v2.0                                           |   <- 顶栏
+|  屏幕、视频、扫描参数可调 · 点击【开始转换】生成 C 字模          |
++----------------------------------------------------------------+
+|                                  |                            |
+|  [文件设置]   滚动               |  [图像预览]                 |
+|  [屏幕尺寸]   ↓                 |  滚动                       |
+|  [图像参数]                     |                            |
+|  [操作]                         |  [幻灯片播放]               |
+|  [激励]                         |                            |
+|                                  |                            |
++----------------------------------------------------------------+
+|  Ready | W=128 H=64 | v2.0 GUI redesign | ...                    |   <- 状态栏
++----------------------------------------------------------------+
+```
+
+### CC.py 改动
+
+* `create_widgets` 重写为四个小方法:
+  - `_build_header()` — 顶栏 (title + subtitle, 没有 separator 留更多空间)
+  - `_build_left_pane(parent_paned)` — scrollable Canvas + Frame, 装所有 controls, 鼠标滚轮支持
+  - `_build_right_pane(parent_paned)` — preview (上, weight=3) + slideshow (下, weight=2)
+  - `_build_status_bar()` — 底栏 (status bar)
+* `_add_file_section` / `_add_screen_section` / `_add_params_section` / `_add_control_buttons` / `_add_inspire_button` — 拆分原来的 194 行 create_widgets
+* 默认窗口从 `960x800` 改为 `1400x900`
+* `__init__` 增 `self.status_var = tk.StringVar(value="Ready")` (status bar 需要)
+
+### 用户体验改进
+
+* 预览和幻灯片**永远可见** (在右栏, 不会被控件挤掉)
+* 控件多的时候左栏自动滚动 (Canvas + Scrollbar + 鼠标滚轮)
+* PanedWindow 的 sash 可拖动调整左/右比例
+* 顶栏不再吃掉垂直空间 (header 只有 ~40px 高)
+
+### 测试
+
+* `verify_original.py` 112/112, `verify_custom_size.py` 160/160, `test_convert.py` 全过.

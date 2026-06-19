@@ -28,7 +28,7 @@ class ImageToFontConverter:
     def __init__(self, root):
         self.root = root
         self.root.title("图像转字模工具")
-        self.root.geometry("960x800")
+        self.root.geometry("1400x900")
 
         # 设置窗口图标
         self.set_window_icon()
@@ -76,6 +76,9 @@ class ImageToFontConverter:
         self._config_path = Path.home() / ".cym_cc_config.json"
         self._load_config()
         self._validate_size(self.width.get(), self.height.get(), silent=True)
+
+        # 状态栏文本 (在 create_widgets 之前初始化, status bar 引用)
+        self.status_var = tk.StringVar(value="Ready")
 
         # 创建UI
         self.create_widgets()
@@ -267,228 +270,236 @@ class ImageToFontConverter:
             style.configure("Status.TLabel", foreground=color)
         except Exception:
             pass
-
     def create_widgets(self):
+        """Two-column layout: left = scrollable controls, right = preview/slideshow.
+
+        Layout:
+            row 0: header (title + subtitle)
+            row 1: PanedWindow horizontal  -> left controls, right preview+slideshow
+            row 2: status separator
+            row 3: status bar
+        """
         # --- Modern ttk theme + global styles ---
         self._init_style()
 
-        # --- Window icon (already set in set_window_icon) ---
+        # --- Top: header bar ---
+        self._build_header()
 
-        # --- Status bar (created early so other methods can update it) ---
-        self.status_var = tk.StringVar(value="Ready")
+        # --- Middle: PanedWindow (left controls, right preview) ---
+        self.paned = ttk.PanedWindow(self.root, orient=tk.HORIZONTAL)
+        self.paned.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=8, pady=(0, 4))
+        self.root.rowconfigure(1, weight=1)
+        self.root.columnconfigure(0, weight=1)
+
+        # Left pane: scrollable controls
+        self._build_left_pane(self.paned)
+        # Right pane: preview + slideshow
+        self._build_right_pane(self.paned)
+
+        # --- Status bar (bottom) ---
         self._init_status_bar()
 
-        # 主框架
-        main_frame = ttk.Frame(self.root, padding="10")
-        main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-        
-        # 配置网格权重
-        self.root.columnconfigure(0, weight=1)
-        self.root.rowconfigure(0, weight=1)
-        main_frame.columnconfigure(0, weight=1)  # 调整列权重，让预览区域更宽
-        main_frame.columnconfigure(1, weight=0)  # 幻灯片区域不扩展
-        
-        # Header bar
-        header_frame = ttk.Frame(main_frame)
-        header_frame.grid(row=0, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 8))
+    def _build_header(self):
+        """Top header: bold title + subtitle."""
+        header_frame = ttk.Frame(self.root)
+        header_frame.grid(row=0, column=0, sticky=(tk.W, tk.E), padx=8, pady=(8, 0))
         header_frame.columnconfigure(0, weight=1)
         ttk.Label(
             header_frame, text="图像转字模工具  v2.0",
             font=("TkDefaultFont", 14, "bold")
         ).grid(row=0, column=0, sticky=tk.W)
         ttk.Label(
-            header_frame, text="屏幕、视频、扫描参数可调 · 点击【开始转换】生成 C 字模",
+            header_frame,
+            text="屏幕、视频、扫描参数可调 · 点击【开始转换】生成 C 字模",
             foreground="#666666"
         ).grid(row=1, column=0, sticky=tk.W, pady=(2, 0))
-        # Add a thin separator below the header for visual grouping
-        ttk.Separator(main_frame, orient="horizontal").grid(
-            row=0, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 2)
-        )
 
-        # Push all subsequent frames down by 1 (header at row 0)
-        # 文件选择区域
-        file_frame = ttk.LabelFrame(main_frame, text="文件设置", padding="10")
-        file_frame.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
-        file_frame.columnconfigure(1, weight=1)
-        
-        ttk.Label(file_frame, text="图像文件夹:").grid(row=0, column=0, sticky=tk.W, pady=2)
-        ttk.Entry(file_frame, textvariable=self.image_folder, width=50).grid(row=0, column=1, sticky=(tk.W, tk.E), padx=(5, 5))
-        ttk.Button(file_frame, text="浏览...", command=self.browse_folder).grid(row=0, column=2, sticky=tk.E, pady=2)
-        
-        ttk.Label(file_frame, text="输出文件:").grid(row=1, column=0, sticky=tk.W, pady=2)
-        ttk.Entry(file_frame, textvariable=self.output_file, width=50).grid(row=1, column=1, sticky=(tk.W, tk.E), padx=(5, 5))
-        ttk.Button(file_frame, text="浏览...", command=self.browse_output).grid(row=1, column=2, sticky=tk.E, pady=2)
-        
-        # 视频文件选择
-        ttk.Label(file_frame, text="视频文件:").grid(row=2, column=0, sticky=tk.W, pady=2)
-        ttk.Entry(file_frame, textvariable=self.video_file, width=50).grid(row=2, column=1, sticky=(tk.W, tk.E), padx=(5, 5))
-        ttk.Button(file_frame, text="浏览...", command=self.browse_video).grid(row=2, column=2, sticky=tk.E, pady=2)
-        
-        # 视频帧间隔设置
-        ttk.Label(file_frame, text="帧间隔:").grid(row=3, column=0, sticky=tk.W, pady=2)
-        frame_interval_frame = ttk.Frame(file_frame)
-        frame_interval_frame.grid(row=3, column=1, sticky=(tk.W, tk.E), padx=(5, 5))
-        ttk.Entry(frame_interval_frame, textvariable=self.video_frame_interval, width=10).grid(row=0, column=0, sticky=tk.W)
-        ttk.Label(frame_interval_frame, text="帧").grid(row=0, column=1, sticky=tk.W, padx=(5, 0))
-        ttk.Button(frame_interval_frame, text="从视频生成图片", command=self.extract_frames_from_video).grid(row=0, column=2, sticky=tk.W, padx=(10, 0))
+    def _build_left_pane(self, parent_paned):
+        """Left pane: scrollable canvas with all control sections."""
+        container = ttk.Frame(parent_paned)
+        parent_paned.add(container, weight=2)
 
-        # 视频编码/分辨率/进度
-        self.video_info_label = ttk.Label(file_frame, text="(select a video to inspect)")
-        self.video_info_label.grid(row=4, column=0, columnspan=3, sticky=tk.W, pady=(2, 0))
-        self.video_progress = ttk.Progressbar(file_frame, orient="horizontal", mode="determinate", maximum=100)
-        # Created but not gridded; shown when extraction starts
-        self.video_progress.grid(row=5, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(2, 0))
-        self.video_progress.grid_remove()
-        self.video_progress_label = ttk.Label(file_frame, text="")
-        self.video_progress_label.grid(row=6, column=0, columnspan=3, sticky=tk.W)
-        self.video_progress_label.grid_remove()
-        video_pause_frame = ttk.Frame(file_frame)
-        video_pause_frame.grid(row=7, column=0, columnspan=3, sticky=tk.W, pady=(2, 0))
-        self.video_pause_btn = ttk.Button(video_pause_frame, text="pause", command=self._toggle_video_pause, state=tk.DISABLED, width=10)
-        self.video_pause_btn.pack(side=tk.LEFT)
-        self.video_extract_btn = None  # set below
+        canvas = tk.Canvas(container, highlightthickness=0, borderwidth=0)
+        v_scroll = ttk.Scrollbar(container, orient=tk.VERTICAL, command=canvas.yview)
+        canvas.configure(yscrollcommand=v_scroll.set)
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        v_scroll.pack(side=tk.RIGHT, fill=tk.Y)
 
-        # 屏幕尺寸 (W、H 必须是 8 的倍数)
-        screen_frame = ttk.LabelFrame(main_frame, text="屏幕尺寸 (8 的倍数; 上限 16384)", padding="10")
-        screen_frame.grid(row=2, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
-        screen_frame.columnconfigure(1, weight=1)
-        ttk.Label(screen_frame, text="宽 (W):").grid(row=0, column=0, sticky=tk.W, pady=2)
-        ttk.Entry(screen_frame, textvariable=self.width, width=10).grid(row=0, column=1, sticky=tk.W, padx=(5, 5))
-        ttk.Label(screen_frame, text="高 (H):").grid(row=0, column=2, sticky=tk.W, padx=(10, 0), pady=2)
-        ttk.Entry(screen_frame, textvariable=self.height, width=10).grid(row=0, column=3, sticky=tk.W, padx=(5, 5))
-        ttk.Button(screen_frame, text="应用到图像处理", command=self._apply_size).grid(row=0, column=4, sticky=tk.W, padx=(10, 0))
-        ttk.Label(screen_frame, text="(非 8 倍会自动 pad; 改 C 端 oled/OLED.h 顶部 #define 同步硬件)").grid(row=1, column=0, columnspan=5, sticky=tk.W, pady=(4, 0))
-        
-        # 参数调节区域
-        param_frame = ttk.LabelFrame(main_frame, text="图像参数调节", padding="10")
-        param_frame.grid(row=3, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
-        param_frame.columnconfigure(1, weight=1)
-        
-        # 亮度调节
-        ttk.Label(param_frame, text="亮度:").grid(row=0, column=0, sticky=tk.W, pady=2)
-        brightness_scale = ttk.Scale(param_frame, from_=-100, to=100, variable=self.brightness, orient=tk.HORIZONTAL, command=self.update_preview)
-        brightness_scale.grid(row=0, column=1, sticky=(tk.W, tk.E), padx=(5, 5))
-        self.brightness_label = ttk.Label(param_frame, text="0")
-        self.brightness_label.grid(row=0, column=2, sticky=tk.W, pady=2)
-        
-        # 对比度调节
-        ttk.Label(param_frame, text="对比度:").grid(row=1, column=0, sticky=tk.W, pady=2)
-        contrast_scale = ttk.Scale(param_frame, from_=0, to=3, variable=self.contrast, orient=tk.HORIZONTAL, command=self.update_preview)
-        contrast_scale.grid(row=1, column=1, sticky=(tk.W, tk.E), padx=(5, 5))
-        self.contrast_label = ttk.Label(param_frame, text="1.0")
-        self.contrast_label.grid(row=1, column=2, sticky=tk.W, pady=2)
-        
-        # 反色选项
-        ttk.Checkbutton(param_frame, text="反色", variable=self.invert_color, command=self.update_preview).grid(row=2, column=0, sticky=tk.W, pady=2)
-        
-        # 旋转角度选项
-        ttk.Label(param_frame, text="旋转角度:").grid(row=3, column=0, sticky=tk.W, pady=2)
-        rotation_frame = ttk.Frame(param_frame)
-        rotation_frame.grid(row=3, column=1, sticky=(tk.W, tk.E), padx=(5, 5))
-        ttk.Radiobutton(rotation_frame, text="0°", variable=self.rotation, value="0", command=self.update_preview).pack(side=tk.LEFT)
-        ttk.Radiobutton(rotation_frame, text="90°", variable=self.rotation, value="90", command=self.update_preview).pack(side=tk.LEFT)
-        ttk.Radiobutton(rotation_frame, text="180°", variable=self.rotation, value="180", command=self.update_preview).pack(side=tk.LEFT)
-        ttk.Radiobutton(rotation_frame, text="270°", variable=self.rotation, value="270", command=self.update_preview).pack(side=tk.LEFT)
-        
-        # 镜像选项
-        mirror_frame = ttk.Frame(param_frame)
-        mirror_frame.grid(row=4, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=2)
-        ttk.Checkbutton(mirror_frame, text="水平镜像", variable=self.horizontal_flip, command=self.update_preview).pack(side=tk.LEFT)
-        ttk.Checkbutton(mirror_frame, text="垂直镜像", variable=self.vertical_flip, command=self.update_preview).pack(side=tk.LEFT)
-        
-        # 幻灯片间隔时间调节
-        ttk.Label(param_frame, text="幻灯片间隔(ms):").grid(row=5, column=0, sticky=tk.W, pady=2)
-        interval_frame = ttk.Frame(param_frame)
-        interval_frame.grid(row=5, column=1, sticky=(tk.W, tk.E), padx=(5, 5))
-        ttk.Entry(interval_frame, textvariable=self.slideshow_interval, width=10).pack(side=tk.LEFT)
-        ttk.Scale(interval_frame, from_=100, to=5000, variable=self.slideshow_interval, orient=tk.HORIZONTAL, command=lambda x: self.slideshow_interval.set(int(float(x)))).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(5, 0))
-        
-        # 扫描方向调节
-        ttk.Label(param_frame, text="扫描方向:").grid(row=6, column=0, sticky=tk.W, pady=2)
-        direction_frame = ttk.Frame(param_frame)
-        direction_frame.grid(row=6, column=1, sticky=(tk.W, tk.E), padx=(5, 5))
-        
-        ttk.Radiobutton(direction_frame, text="垂直", variable=self.scan_direction, value="vertical", command=self.update_preview).pack(side=tk.LEFT)
-        ttk.Radiobutton(direction_frame, text="水平", variable=self.scan_direction, value="horizontal", command=self.update_preview).pack(side=tk.LEFT)
-        
-        # 扫描顺序调节
-        ttk.Label(param_frame, text="扫描顺序:").grid(row=7, column=0, sticky=tk.W, pady=2)
-        order_frame1 = ttk.Frame(param_frame)
-        order_frame1.grid(row=7, column=1, sticky=(tk.W, tk.E), padx=(5, 5), columnspan=2)
-        
-        ttk.Radiobutton(order_frame1, text="从左到右，从上到下", variable=self.scan_order, value="left_to_right_top_to_bottom", command=self.update_preview).pack(side=tk.LEFT)
-        ttk.Radiobutton(order_frame1, text="从上到下，从左到右", variable=self.scan_order, value="top_to_bottom_left_to_right", command=self.update_preview).pack(side=tk.LEFT)
-        
-        order_frame2 = ttk.Frame(param_frame)
-        order_frame2.grid(row=8, column=1, sticky=(tk.W, tk.E), padx=(5, 5), columnspan=2)
-        
-        ttk.Radiobutton(order_frame2, text="从右到左，从上到下", variable=self.scan_order, value="right_to_left_top_to_bottom", command=self.update_preview).pack(side=tk.LEFT)
-        ttk.Radiobutton(order_frame2, text="从下到上，从左到右", variable=self.scan_order, value="bottom_to_top_left_to_right", command=self.update_preview).pack(side=tk.LEFT)
-        
-        order_frame3 = ttk.Frame(param_frame)
-        order_frame3.grid(row=9, column=1, sticky=(tk.W, tk.E), padx=(5, 5), columnspan=2)
-        
-        ttk.Radiobutton(order_frame3, text="从左到右，从下到上", variable=self.scan_order, value="left_to_right_bottom_to_top", command=self.update_preview).pack(side=tk.LEFT)
-        ttk.Radiobutton(order_frame3, text="从右到左，从下到上", variable=self.scan_order, value="right_to_left_bottom_to_top", command=self.update_preview).pack(side=tk.LEFT)
-        
-        order_frame4 = ttk.Frame(param_frame)
-        order_frame4.grid(row=10, column=1, sticky=(tk.W, tk.E), padx=(5, 5), columnspan=2)
-        
-        ttk.Radiobutton(order_frame4, text="从上到下，从右到左", variable=self.scan_order, value="top_to_bottom_right_to_left", command=self.update_preview).pack(side=tk.LEFT)
-        ttk.Radiobutton(order_frame4, text="从下到上，从右到左", variable=self.scan_order, value="bottom_to_top_right_to_left", command=self.update_preview).pack(side=tk.LEFT)
-        
-        # 图像预览区域
-        preview_frame = ttk.LabelFrame(main_frame, text="图像预览", padding="10")
-        preview_frame.grid(row=4, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 10))
+        inner = ttk.Frame(canvas)
+        inner_id = canvas.create_window((0, 0), window=inner, anchor="nw")
+        inner.bind("<Configure>", lambda _e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.bind("<Configure>", lambda e, c=canvas, iid=inner_id: c.itemconfig(iid, width=e.width))
+
+        def _on_wheel(event, c=canvas):
+            c.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        canvas.bind("<MouseWheel>", _on_wheel)
+        canvas.bind("<Button-4>", lambda e, c=canvas: c.yview_scroll(-1, "units"))
+        canvas.bind("<Button-5>", lambda e, c=canvas: c.yview_scroll(1, "units"))
+
+        self._add_file_section(inner)
+        self._add_screen_section(inner)
+        self._add_params_section(inner)
+        self._add_control_buttons(inner)
+        self._add_inspire_button(inner)
+
+    def _build_right_pane(self, parent_paned):
+        """Right pane: preview grid on top, slideshow on bottom."""
+        container = ttk.Frame(parent_paned)
+        parent_paned.add(container, weight=3)
+        container.columnconfigure(0, weight=1)
+        container.rowconfigure(0, weight=3)  # preview gets more
+        container.rowconfigure(1, weight=2)  # slideshow
+
+        preview_frame = ttk.LabelFrame(container, text="图像预览", padding="8")
+        preview_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 4))
         preview_frame.columnconfigure(0, weight=1)
         preview_frame.rowconfigure(0, weight=1)
-        main_frame.rowconfigure(4, weight=1)
-        
-        # Canvas用于显示图像
         self.canvas = tk.Canvas(preview_frame, bg="white")
         self.canvas.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-        
-        # 滚动条
-        v_scrollbar = ttk.Scrollbar(preview_frame, orient=tk.VERTICAL, command=self.canvas.yview)
-        v_scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
-        h_scrollbar = ttk.Scrollbar(preview_frame, orient=tk.HORIZONTAL, command=self.canvas.xview)
-        h_scrollbar.grid(row=1, column=0, sticky=(tk.W, tk.E))
-        
-        self.canvas.configure(yscrollcommand=v_scrollbar.set, xscrollcommand=h_scrollbar.set)
-        
-        # 幻灯片播放区域
-        slideshow_frame = ttk.LabelFrame(main_frame, text="幻灯片播放", padding="10")
-        slideshow_frame.grid(row=4, column=1, sticky=(tk.W, tk.E, tk.N, tk.S), padx=(10, 0), pady=(0, 10))
+        v_sb = ttk.Scrollbar(preview_frame, orient=tk.VERTICAL, command=self.canvas.yview)
+        v_sb.grid(row=0, column=1, sticky=(tk.N, tk.S))
+        h_sb = ttk.Scrollbar(preview_frame, orient=tk.HORIZONTAL, command=self.canvas.xview)
+        h_sb.grid(row=1, column=0, sticky=(tk.W, tk.E))
+        self.canvas.configure(yscrollcommand=v_sb.set, xscrollcommand=h_sb.set)
+
+        slideshow_frame = ttk.LabelFrame(container, text="幻灯片播放", padding="8")
+        slideshow_frame.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(4, 0))
         slideshow_frame.columnconfigure(0, weight=1)
         slideshow_frame.rowconfigure(0, weight=1)
-        slideshow_frame.config(width=300)  # 设置幻灯片区域的固定宽度
-        
-        # 幻灯片Canvas，按当前 W、H 的 2x 显示
-        self.slideshow_canvas = tk.Canvas(slideshow_frame, bg="black", width=self._W * 2, height=self._H * 2)
+        self.slideshow_canvas = tk.Canvas(
+            slideshow_frame, bg="black",
+            width=max(self._W * 2, 256), height=max(self._H * 2, 128)
+        )
         self.slideshow_canvas.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-        
-        # 幻灯片控制按钮
-        slideshow_control_frame = ttk.Frame(slideshow_frame)
-        slideshow_control_frame.grid(row=1, column=0, pady=(5, 0))
-        
-        self.play_button = ttk.Button(slideshow_control_frame, text="播放", command=self.start_slideshow)
+        ctrl = ttk.Frame(slideshow_frame)
+        ctrl.grid(row=1, column=0, pady=(5, 0))
+        self.play_button = ttk.Button(ctrl, text="播放", command=self.start_slideshow)
         self.play_button.pack(side=tk.LEFT, padx=(0, 5))
-        
-        self.stop_button = ttk.Button(slideshow_control_frame, text="停止", command=self.stop_slideshow, state=tk.DISABLED)
+        self.stop_button = ttk.Button(ctrl, text="停止", command=self.stop_slideshow, state=tk.DISABLED)
         self.stop_button.pack(side=tk.LEFT, padx=(0, 5))
-        
-        # 控制按钮区域
-        button_frame = ttk.Frame(main_frame)
-        button_frame.grid(row=5, column=0, columnspan=2, pady=(10, 0))
-        
-        ttk.Button(button_frame, text="刷新预览", command=self.refresh_preview).pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Button(button_frame, text="开始转换", command=self.convert_images, style="Accent.TButton").pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Button(button_frame, text="退出", command=self.root.quit).pack(side=tk.LEFT)
-        
-        # 添加激励按钮
-        self.inspire_button = ttk.Button(main_frame, text="激励", command=self.show_inspire_image)
-        self.inspire_button.grid(row=6, column=0, sticky=tk.SW, padx=(10, 0), pady=(10, 10))
-        
+        ttk.Button(ctrl, text="刷新预览", command=self.refresh_preview).pack(side=tk.LEFT)
+
+    def _add_file_section(self, parent):
+        """File selection widgets."""
+        frame = ttk.LabelFrame(parent, text="文件设置", padding="8")
+        frame.pack(fill=tk.X, padx=4, pady=4)
+        frame.columnconfigure(1, weight=1)
+        ttk.Label(frame, text="图像文件夹:").grid(row=0, column=0, sticky=tk.W, pady=2)
+        row0 = ttk.Frame(frame); row0.grid(row=0, column=1, columnspan=2, sticky=(tk.W, tk.E), padx=(5, 0))
+        row0.columnconfigure(0, weight=1)
+        ttk.Entry(row0, textvariable=self.image_folder).grid(row=0, column=0, sticky=(tk.W, tk.E))
+        ttk.Button(row0, text="浏览...", width=8, command=self.browse_folder).grid(row=0, column=1, padx=(4, 0))
+        ttk.Label(frame, text="输出文件:").grid(row=1, column=0, sticky=tk.W, pady=2)
+        row1 = ttk.Frame(frame); row1.grid(row=1, column=1, columnspan=2, sticky=(tk.W, tk.E), padx=(5, 0))
+        row1.columnconfigure(0, weight=1)
+        ttk.Entry(row1, textvariable=self.output_file).grid(row=0, column=0, sticky=(tk.W, tk.E))
+        ttk.Button(row1, text="浏览...", width=8, command=self.browse_output).grid(row=0, column=1, padx=(4, 0))
+        ttk.Label(frame, text="视频文件:").grid(row=2, column=0, sticky=tk.W, pady=2)
+        row2 = ttk.Frame(frame); row2.grid(row=2, column=1, columnspan=2, sticky=(tk.W, tk.E), padx=(5, 0))
+        row2.columnconfigure(0, weight=1)
+        ttk.Entry(row2, textvariable=self.video_file).grid(row=0, column=0, sticky=(tk.W, tk.E))
+        ttk.Button(row2, text="浏览...", width=8, command=self.browse_video).grid(row=0, column=1, padx=(4, 0))
+        ttk.Label(frame, text="帧间隔:").grid(row=3, column=0, sticky=tk.W, pady=2)
+        fi = ttk.Frame(frame); fi.grid(row=3, column=1, columnspan=2, sticky=(tk.W, tk.E), padx=(5, 0))
+        ttk.Entry(fi, textvariable=self.video_frame_interval, width=8).pack(side=tk.LEFT)
+        ttk.Label(fi, text="帧").pack(side=tk.LEFT, padx=(4, 8))
+        self.video_extract_btn = ttk.Button(fi, text="从视频生成图片", command=self.extract_frames_from_video)
+        self.video_extract_btn.pack(side=tk.LEFT)
+        self.video_info_label = ttk.Label(frame, text="(select a video to inspect)")
+        self.video_info_label.grid(row=4, column=0, columnspan=3, sticky=tk.W, pady=(4, 0))
+        self.video_progress = ttk.Progressbar(frame, orient="horizontal", mode="determinate", maximum=100)
+        self.video_progress.grid(row=5, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(2, 0))
+        self.video_progress.grid_remove()
+        self.video_progress_label = ttk.Label(frame, text="")
+        self.video_progress_label.grid(row=6, column=0, columnspan=3, sticky=tk.W)
+        self.video_progress_label.grid_remove()
+        pause_row = ttk.Frame(frame)
+        pause_row.grid(row=7, column=0, columnspan=3, sticky=tk.W, pady=(2, 0))
+        self.video_pause_btn = ttk.Button(pause_row, text="pause", command=self._toggle_video_pause, state=tk.DISABLED, width=10)
+        self.video_pause_btn.pack(side=tk.LEFT)
+
+    def _add_screen_section(self, parent):
+        """Screen size W, H inputs."""
+        frame = ttk.LabelFrame(parent, text="屏幕尺寸 (8 的倍数; 上限 16384)", padding="8")
+        frame.pack(fill=tk.X, padx=4, pady=4)
+        frame.columnconfigure(1, weight=1)
+        row = ttk.Frame(frame); row.pack(fill=tk.X)
+        ttk.Label(row, text="宽 (W):").pack(side=tk.LEFT)
+        ttk.Entry(row, textvariable=self.width, width=10).pack(side=tk.LEFT, padx=(5, 15))
+        ttk.Label(row, text="高 (H):").pack(side=tk.LEFT)
+        ttk.Entry(row, textvariable=self.height, width=10).pack(side=tk.LEFT, padx=(5, 15))
+        ttk.Button(row, text="应用到图像处理", command=self._apply_size).pack(side=tk.LEFT, padx=(5, 0))
+        ttk.Label(frame, text="(非 8 倍会自动 pad; 改 C 端 oled/OLED.h 顶部 #define 同步硬件)",
+                  foreground="#888888").pack(anchor=tk.W, pady=(4, 0))
+
+    def _add_params_section(self, parent):
+        """Brightness, contrast, invert, rotation, mirror, scan direction + order, slideshow interval."""
+        frame = ttk.LabelFrame(parent, text="图像参数调节", padding="8")
+        frame.pack(fill=tk.X, padx=4, pady=4)
+        frame.columnconfigure(1, weight=1)
+
+        r = ttk.Frame(frame); r.grid(row=0, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=2)
+        r.columnconfigure(0, weight=1)
+        ttk.Label(r, text="亮度:").grid(row=0, column=0, sticky=tk.W)
+        ttk.Scale(r, from_=-100, to=100, variable=self.brightness, orient=tk.HORIZONTAL, command=self.update_preview).grid(row=0, column=1, sticky=(tk.W, tk.E), padx=5)
+        self.brightness_label = ttk.Label(r, text="0", width=5)
+        self.brightness_label.grid(row=0, column=2)
+
+        r = ttk.Frame(frame); r.grid(row=1, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=2)
+        r.columnconfigure(0, weight=1)
+        ttk.Label(r, text="对比度:").grid(row=0, column=0, sticky=tk.W)
+        ttk.Scale(r, from_=0, to=3, variable=self.contrast, orient=tk.HORIZONTAL, command=self.update_preview).grid(row=0, column=1, sticky=(tk.W, tk.E), padx=5)
+        self.contrast_label = ttk.Label(r, text="1.0", width=5)
+        self.contrast_label.grid(row=0, column=2)
+
+        r = ttk.Frame(frame); r.grid(row=2, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=2)
+        ttk.Checkbutton(r, text="反色", variable=self.invert_color, command=self.update_preview).pack(side=tk.LEFT)
+        for v, t in [("0", "0°"), ("90", "90°"), ("180", "180°"), ("270", "270°")]:
+            ttk.Radiobutton(r, text=t, variable=self.rotation, value=v, command=self.update_preview).pack(side=tk.LEFT, padx=(8, 0))
+
+        r = ttk.Frame(frame); r.grid(row=3, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=2)
+        ttk.Checkbutton(r, text="水平镜像", variable=self.horizontal_flip, command=self.update_preview).pack(side=tk.LEFT)
+        ttk.Checkbutton(r, text="垂直镜像", variable=self.vertical_flip, command=self.update_preview).pack(side=tk.LEFT, padx=(8, 0))
+
+        r = ttk.Frame(frame); r.grid(row=4, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(6, 2))
+        ttk.Label(r, text="扫描方向:").pack(side=tk.LEFT)
+        ttk.Radiobutton(r, text="vertical", variable=self.scan_direction, value="vertical", command=self.update_preview).pack(side=tk.LEFT, padx=(8, 8))
+        ttk.Radiobutton(r, text="horizontal", variable=self.scan_direction, value="horizontal", command=self.update_preview).pack(side=tk.LEFT)
+
+        r = ttk.Frame(frame); r.grid(row=5, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=2)
+        ttk.Label(r, text="扫描顺序:").pack(side=tk.LEFT)
+        order_grid = ttk.Frame(frame); order_grid.grid(row=6, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=2)
+        scan_orders = [
+            ("L→R, T→B", "left_to_right_top_to_bottom"),
+            ("T→B, L→R", "top_to_bottom_left_to_right"),
+            ("R→L, T→B", "right_to_left_top_to_bottom"),
+            ("T→B, R→L", "top_to_bottom_right_to_left"),
+            ("B→T, L→R", "bottom_to_top_left_to_right"),
+            ("L→R, B→T", "left_to_right_bottom_to_top"),
+            ("R→L, B→T", "right_to_left_bottom_to_top"),
+            ("B→T, R→L", "bottom_to_top_right_to_left"),
+        ]
+        for i, (label, value) in enumerate(scan_orders):
+            rr, cc = divmod(i, 2)
+            ttk.Radiobutton(order_grid, text=label, variable=self.scan_order, value=value, command=self.update_preview).grid(row=rr, column=cc, sticky=tk.W, padx=(0, 12))
+
+        r = ttk.Frame(frame); r.grid(row=7, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(6, 2))
+        ttk.Label(r, text="幻灯片间隔 (ms):").pack(side=tk.LEFT)
+        ttk.Entry(r, textvariable=self.slideshow_interval, width=10).pack(side=tk.LEFT, padx=(5, 0))
+
+    def _add_control_buttons(self, parent):
+        """Refresh / start conversion / exit buttons."""
+        frame = ttk.LabelFrame(parent, text="操作", padding="8")
+        frame.pack(fill=tk.X, padx=4, pady=4)
+        ttk.Button(frame, text="刷新预览", command=self.refresh_preview).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(frame, text="开始转换", command=self.convert_images, style="Accent.TButton").pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(frame, text="退出", command=self.root.quit).pack(side=tk.LEFT)
+
+    def _add_inspire_button(self, parent):
+        """Inspire button (easter egg)."""
+        ttk.Button(parent, text="激励", command=self.show_inspire_image).pack(anchor=tk.W, padx=4, pady=4)
+
+
     def browse_folder(self):
         folder = filedialog.askdirectory()
         if folder:
