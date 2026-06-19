@@ -36,9 +36,9 @@
 - **自定义屏幕尺寸**：W、H 可设到 16384 (16K 屏幕字面含义)；非 8 的倍数自动向上 padding 并在生成代码里写明。
 - **C 驱动 `#define` 可配置**：`oled/OLED.h` 改 3 个尺寸宏 (`OLED_WIDTH` / `OLED_HEIGHT` / `OLED_PAGES`) + 4 个 I2C 宏 (`OLED_I2C_ADDR` / `OLED_I2C_CMD` / `OLED_I2C_DATA` / `OLED_CONTROLLER`) 适配 SSD1306 / SH1106 / 自定义控制器；函数签名不变。
 
-## 效果预览 (v2.0 GUI)
+## 效果预览 (v0.3 两栏布局)
 
-现代 ttk vista/clam 主题、顶栏带版本号标题、底部 status bar (绿色/橙色/红色根据状态)。
+现代 ttk vista/clam 主题, 两栏布局 (左 controls 滚动 / 右 preview+slideshow 永远可见), 顶栏带版本号标题, 底栏 status bar。
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -92,7 +92,7 @@ python CC.py
 
 ### 3. 或者直接用预编译的 `CC.exe`
 
-[Release 页面](https://github.com/cym9196/CC/releases) 下载最新 `CC.exe` (约 79 MB, v2.0 GUI) 双击即可。
+[Release 页面](https://github.com/cym9196/CC/releases) 下载最新 `CC.exe` (约 79 MB, v0.3 两栏布局) 双击即可。
 
 ## 界面说明
 
