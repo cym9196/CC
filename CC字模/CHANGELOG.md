@@ -1,5 +1,44 @@
 # Changelog
 
+## v0.4.1 - 激励图片 (jili.jpg) (2026-06-19)
+
+v0.4 发布后, 加入 激励 (彩蛋) 按钮配套的精美图片, 并完善弹窗体验。
+
+### 新增
+
+* **jili.jpg (52KB) + jili.png (43KB)** - 800x600 暖色渐变图:
+  * 红心 + 粉色心叠加 (顶部居中)
+  * 主标题: 谢谢您的支持！ (72pt 粗黑)
+  * 副标题: 您的 Star 和反馈是我最大的动力 (36pt)
+  * 底部: CC - 图像转字模工具 v0.4 + github.com/cym9196/CC
+  * 40 个随机彩点装饰 (黄/粉)
+* **show_inspire_image 弹窗增强**:
+  * 标题: 🎉 谢谢您的激励！ — CC v0.4 (带 cym_icon.ico 图标)
+  * 居中显示, 米黄底 (#fff8e7), 12px padding
+  * 大图自动按比例缩放到 720x540
+  * 底部双按钮: [关闭] [⭐ 去 GitHub 给个 Star]
+  * 4 级 fallback: 磁盘 jpg -> 磁盘 png -> 内嵌 jpg -> 内嵌 png -> 自动生成纯文字图
+  * 状态栏显示加载来源 (disk/embedded/fallback)
+* **_open_github()** 新方法 - webbrowser 打开 https://github.com/cym9196/CC
+* **_make_text_thankyou_image()** 新方法 - PIL 生成纯文字兜底图, 完全无依赖
+
+### 嵌入方式
+
+build.py 自动扫描 `jili.jpg` / `jili.png` / `picture/` 下所有图片, 嵌入到 `resources.py` 的 `RESOURCES` 字典, PyInstaller 打包到 EXE。
+运行时优先从内嵌资源读取, 完全不需要外部文件。
+
+EXE 体积: 79,067,148 -> 80,170,274 (+1.5MB, 来自 jpg + png)
+
+### 测试
+
+* verify_original.py: **112/112 通过**
+* verify_custom_size.py: **160/160 通过**
+* show_inspire_image 弹窗测试: 标题/居中/缩放/按钮 全部正常
+
+### EXE
+
+* PyInstaller 重新打包: CC.exe (~80 MB)
+* GitHub Release: **v0.4.1** (https://github.com/cym9196/CC/releases/tag/v0.4.1)
 ## v0.4 (rev2) - 三 tab Notebook 布局 (2026-06-19)
 
 之前的 v0.3 两栏布局把 header / file / screen / params / preview / controls 全部塞在 main_frame 的不同 row 里，

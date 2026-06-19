@@ -83,7 +83,7 @@ python CC.py
 
 ### 3. 或者直接用预编译的 `CC.exe`
 
-[Release 页面](https://github.com/cym9196/CC/releases) 下载最新 `CC.exe` (约 79 MB, v0.4 三 tab 布局) 双击即可。
+[Release 页面](https://github.com/cym9196/CC/releases) 下载最新 `CC.exe` (约 80 MB, v0.4.1 激励图片) 双击即可。
 
 ## 界面说明
 
