@@ -1,5 +1,56 @@
 # Changelog
 
+## v0.4 (rev2) - 三 tab Notebook 布局 (2026-06-19)
+
+之前的 v0.3 两栏布局把 header / file / screen / params / preview / controls 全部塞在 main_frame 的不同 row 里，
+960x800 默认窗口下预览和幻灯片都挤到屏幕外。
+v0.3 改成 ttk.PanedWindow 水平两栏后，左侧 controls 区域里的子项 (文件设置/屏幕尺寸/图像参数调节/控制按钮) 太多，
+scrollable frame 也不够好用。v0.4 直接换成 ttk.Notebook 三 tab 布局：
+
+### 布局 (v0.4)
+
+```
++--------------------------------------------------------------------+
+|  图像转字模工具  v2.0                                W=128 H=64   |  <- row 0: header
++--------------------------------------------------------------------+
+|  [屏幕] [参数] [操作]  Notebook  |  [图像预览]      (weight=3)      |  <- row 1: paned
+|  (left pane, 360px)              |  [幻灯片播放]    (weight=2)      |
++--------------------------------------------------------------------+
+|  Ready | W=128 H=64 | v2.0 GUI | ...                             |  <- row 2: status
++--------------------------------------------------------------------+
+```
+
+### 改动
+
+* **create_widgets 重写**：拆分出 _build_header / _build_left_pane / _build_right_pane / _init_status_bar。
+* **_build_left_pane** 用 ttk.Notebook，3 个 tab：
+  * **屏幕**：宽 W / 高 H + 应用到图像处理 按钮 + 提示标签 (8 倍 padding / C 端 #define)
+  * **参数**：亮度/对比度滑块 + 反色 + 旋转 (0/90/180/270) + 水平/垂直镜像 + 扫描方向 (vertical/horizontal) + 8 种扫描顺序 + 幻灯片间隔
+  * **操作**：刷新预览 / 开始转换 / 退出 3 个大按钮 + 视频抽帧 (文件 + 帧间隔 + 进度 + 暂停) + 激励按钮
+* **_build_right_pane**：preview canvas (weight=3) + slideshow canvas (weight=2)，永远可见。
+* **sash 起始位置**固定 360 px (self.paned.sashpos(0, 360) 在 __init__ 里 create_widgets() 之后调)。
+* **预览画布背景** #fafafa，**幻灯片画布背景** #0a0a0a，对比明显。
+* **占位提示文字**:
+  * 预览: 选择一个图像文件夹后, 点【刷新预览】查看预览 或点【开始转换】生成 C 字模数据
+  * 幻灯片: 幻灯片预览 (need images)
+* **状态栏 row 修正**: 之前 _init_status_bar 用 row=1 跟 paned 冲突；现在用 row=2，且去掉了旧的 separator line。
+* **默认窗口尺寸** 1400x900。
+
+### 删除
+
+* _build_toolbar（v0.4 不再使用 toolbar；文件/视频输入移到 操作 tab 里）。
+* 旧的 __init__ 里一坨 LabelFrame 拼接代码。
+
+### 测试
+
+* verify_original.py: **112/112 通过**
+* verify_custom_size.py: **160/160 通过**
+* test_convert.py: **全部通过**
+
+### EXE
+
+* PyInstaller 重新打包：CC字模/dist/CC.exe (~79 MB) -> 复制到 CC.exe。
+* GitHub Release: **v0.4**。
 ## 优化 (2026-06-19)
 
 ### CC.py — 主程序
